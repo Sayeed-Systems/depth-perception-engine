@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Warehouse Autonomy Blueprint</title>
+<style>
+  @page {
+    size: A4;
+    margin: 28mm 20mm 22mm 20mm;
+    @bottom-right { content: counter(page) " / " counter(pages); font-size: 9px; color: #6b7280; font-family: Helvetica, Arial, sans-serif; }
+    @bottom-left { content: "Warehouse Autonomy Blueprint"; font-size: 9px; color: #6b7280; font-family: Helvetica, Arial, sans-serif; }
+  }
+  @page cover {
+    margin: 0;
+    @bottom-right { content: none; }
+    @bottom-left { content: none; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Helvetica', Arial, sans-serif;
+    color: #1f2937;
+    font-size: 10.5pt;
+    line-height: 1.55;
+  }
+  h1, h2, h3, h4 { color: #111827; font-family: Helvetica, Arial, sans-serif; }
+  h1 { font-size: 19pt; border-bottom: 3px solid #2563eb; padding-bottom: 6px; margin-top: 0; }
+  h2 { font-size: 14pt; color: #1e3a8a; margin-top: 26px; }
+  h3 { font-size: 12pt; color: #334155; margin-top: 18px; }
+  .section { page-break-before: always; }
+  .no-break { page-break-before: auto; }
+  p { margin: 6px 0 10px 0; text-align: justify; }
+  .lead { font-size: 11.5pt; color: #374151; }
+
+  /* ---- Cover page ---- */
+  .cover {
+    page: cover;
+    page-break-after: always;
+    height: 297mm;
+    background: linear-gradient(160deg, #0f172a 0%, #1e3a8a 55%, #2563eb 100%);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 70px 60px;
+  }
+  .cover .tag {
+    letter-spacing: 3px;
+    font-size: 11pt;
+    color: #93c5fd;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .cover h1 {
+    border: none;
+    color: white;
+    font-size: 34pt;
+    line-height: 1.18;
+    margin: 0 0 14px 0;
+  }
+  .cover .subtitle {
+    font-size: 14pt;
+    color: #dbeafe;
+    max-width: 480px;
+    margin-bottom: 50px;
+  }
+  .cover .agents {
+    display: flex;
+    gap: 18px;
+    margin-bottom: 60px;
+  }
+  .cover .pill {
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 10pt;
+    color: #e0e7ff;
+    background: rgba(255,255,255,0.06);
+  }
+  .cover .meta {
+    font-size: 9.5pt;
+    color: #bfdbfe;
+    border-top: 1px solid rgba(255,255,255,0.25);
+    padding-top: 14px;
+    max-width: 480px;
+  }
+  .status-banner {
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    color: #7c2d12;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 9.5pt;
+    margin: 14px 0 18px 0;
+  }
+
+  /* ---- TOC ---- */
+  .toc-list { list-style: none; padding: 0; margin: 0; }
+  .toc-list li { padding: 6px 0; border-bottom: 1px dotted #cbd5e1; font-size: 10.5pt; display: flex; justify-content: space-between; }
+  .toc-list .num { color: #2563eb; font-weight: bold; margin-right: 8px; }
+
+  /* ---- Figures ---- */
+  figure { margin: 14px 0 22px 0; text-align: center; }
+  figure img { max-width: 100%; max-height: 270px; }
+  figcaption { font-size: 9pt; color: #6b7280; margin-top: 6px; }
+
+  /* ---- Tables ---- */
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 18px 0; font-size: 9.3pt; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  th { background: #1e3a8a; color: white; text-align: left; padding: 7px 9px; font-size: 9.3pt; }
+  td { padding: 6px 9px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .status-built { color: #166534; font-weight: bold; }
+  .status-unwired { color: #b45309; font-weight: bold; }
+  .status-planned { color: #b91c1c; font-weight: bold; }
+
+  /* ---- Callouts ---- */
+  .callout {
+    border-left: 4px solid #2563eb;
+    background: #eff6ff;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 9.8pt;
+    margin: 12px 0;
+  }
+  .callout.warn { border-left-color: #d97706; background: #fffbeb; }
+  .callout.deferred { border-left-color: #dc2626; background: #fef2f2; }
+
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 8.3pt; font-weight: bold; margin-left: 6px;}
+  .badge-uav { background: #fef3c7; color: #92400e; }
+  .badge-rover { background: #dcfce7; color: #166534; }
+  .badge-both { background: #dbeafe; color: #1e40af; }
+
+  .phase-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+  .phase-card { flex: 1 1 28%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 10px; font-size: 9pt; }
+  .phase-card h4 { margin: 0 0 4px 0; font-size: 9.5pt; color: #1e3a8a; }
+
+  footer.section-footer { font-size: 8pt; color: #9ca3af; margin-top: 30px; }
+</style>
+</head>
+<body>
+
+<!-- ===================== COVER ===================== -->
+<div class="cover">
+  <div class="tag">Technical Blueprint &nbsp;·&nbsp; Multi-Agent Autonomy</div>
+  <h1>Warehouse Autonomy Stack</h1>
+  <div class="subtitle">A decentralized, vision-and-inertial-driven navigation and task-allocation architecture for a collaborating UAV and ground rover.</div>
+  <div class="agents">
+    <div class="pill">● UAV Agent — Stereo + IMU + 1D Lidar</div>
+    <div class="pill">● Ground Rover Agent</div>
+    <div class="pill">● Decentralized Swarm Link</div>
+  </div>
+  <div class="meta">
+    Project: depth_perception_engine &nbsp;|&nbsp; Document type: Architecture Blueprint (target design, see Implementation Status for what is built today) &nbsp;|&nbsp; Compute target: NVIDIA Jetson Orin Nano &nbsp;|&nbsp; Flight controller: Pixhawk (PX4/ArduPilot, MAVLink)
+  </div>
+</div>
+
+<!-- ===================== TOC ===================== -->
+<div class="section">
+<h1>Table of Contents</h1>
+<ul class="toc-list">
+  <li><span><span class="num">1.</span>Executive Summary</span></li>
+  <li><span><span class="num">2.</span>Project Vision &amp; Use Case</span></li>
+  <li><span><span class="num">3.</span>System-Level Architecture</span></li>
+  <li><span><span class="num">4.</span>Hardware Stack</span></li>
+  <li><span><span class="num">5.</span>Software Architecture — Per-Agent Pipeline</span></li>
+  <li><span><span class="num">6.</span>Multi-Agent Coordination Layer</span></li>
+  <li><span><span class="num">7.</span>End-to-End Workflow</span></li>
+  <li><span><span class="num">8.</span>Safety &amp; Failsafe Architecture</span></li>
+  <li><span><span class="num">9.</span>Current Implementation Status vs. Blueprint</span></li>
+  <li><span><span class="num">10.</span>Technology Choices Summary</span></li>
+  <li><span><span class="num">11.</span>Phased Build Roadmap</span></li>
+  <li><span><span class="num">12.</span>Appendix — Deferred / Out-of-Scope Items</span></li>
+</ul>
+</div>
+
+<!-- ===================== 1. EXEC SUMMARY ===================== -->
+<div class="section">
+<h1>1. Executive Summary</h1>
+<p class="lead">This document specifies the target architecture for a decentralized, two-agent autonomous system — one aerial (UAV) and one ground (rover) — collaborating on warehouse automation tasks such as inventory scanning and item retrieval. Both agents share an identical perception-to-command software pipeline built from stereo vision, a dedicated time-synced IMU, and a single-point (1D) lidar for range aiding, fused into a Visual-Inertial state estimate (VIO / VI-SLAM). Navigation is purely geometric — no onboard object detection/classification is used, by deliberate design, to preserve compute and power budget on the target edge-compute platform (NVIDIA Jetson Orin Nano) for higher-priority workloads.</p>
+<p>The two agents coordinate without a central fleet manager: tasks are announced, bid on, and assigned through a decentralized, capability-aware negotiation protocol carried over a mesh communication link. Each agent's own safety supervisor has final authority over any command sent to its flight controller (Pixhawk) or motor controller — including commands eventually produced by a learned (NN-based) local planner, which is treated as an optional, sandboxed contributor rather than a trusted authority.</p>
+<div class="status-banner">
+<strong>Document status:</strong> this is a forward-looking architecture blueprint. Section&nbsp;9 distinguishes precisely between what exists in the current codebase today (single-UAV, stereo-only reactive obstacle avoidance) and what is planned. Treat all other sections as target design, not as-built description.
+</div>
+</div>
+
+<!-- ===================== 2. VISION ===================== -->
+<div class="section">
+<h1>2. Project Vision &amp; Use Case</h1>
+<h2>2.1 Problem framing</h2>
+<p>Most deployed warehouse robot fleets (e.g. Amazon Robotics, Locus Robotics, Berkshire Grey-class systems) use a <em>centralized</em> fleet manager directing a largely homogeneous ground fleet. This project targets a harder and more general problem: <strong>heterogeneous, decentralized coordination</strong> between an aerial agent and a ground agent, each with different capabilities, negotiating task ownership among themselves rather than being told what to do by a central broker.</p>
+<h2>2.2 Capability asymmetry — why two agent types</h2>
+<table>
+<thead><tr><th>Capability</th><th>UAV</th><th>Ground Rover</th></tr></thead>
+<tbody>
+<tr><td>Coverage speed</td><td>Fast, unobstructed by floor-level clutter and aisles</td><td>Slower, constrained to drivable floor space</td></tr>
+<tr><td>Vantage point</td><td>Elevated / aerial view — good for wide-area scanning</td><td>Ground-level — good for under/behind-obstacle visibility</td></tr>
+<tr><td>Payload</td><td>Limited (battery/lift constrained)</td><td>Higher payload capacity</td></tr>
+<tr><td>Endurance</td><td>Shorter flight time</td><td>Longer operating duration</td></tr>
+<tr><td>Position reliability</td><td>Drift-prone (inertial/visual only, no wheel reference)</td><td>More reliable (wheel odometry available as an additional reference)</td></tr>
+</tbody>
+</table>
+<p>Because no single agent dominates on every axis, task allocation is genuinely a function of capability and current state (location, battery, current task), not a fixed rule — which is why the allocation mechanism (Section&nbsp;6) is a negotiation, not a lookup table.</p>
+<h2>2.3 Representative task</h2>
+<p>Example task cycle: a "scan aisle 4 and retrieve item X" task is announced on the shared task queue. The UAV, closer and with a clear flight path, bids to perform the aerial scan; the rover, positioned nearer the target shelf, bids to perform retrieval. Both subtasks execute concurrently, each agent running its own full perception-to-command loop independently.</p>
+</div>
+
+<!-- ===================== 3. SYSTEM ARCHITECTURE ===================== -->
+<div class="section">
+<h1>3. System-Level Architecture</h1>
+<p>At the top level, the system is two independent, structurally identical agent stacks, joined only by a thin coordination layer and a decentralized comm link. Neither agent depends on the other to perceive, localize, or avoid obstacles — coordination affects only <em>which task</em> an agent works on, never how it perceives or moves.</p>
+<figure>
+  <img src="assets/01_system_overview.svg">
+  <figcaption>Figure 1 — System-level overview: two independently-operating agents joined by a decentralized coordination layer.</figcaption>
+</figure>
+<div class="callout">
+<strong>Design principle:</strong> the coordination layer is strictly an overlay. If the comm link is lost, each agent should be able to fall back to a sane default (e.g. complete current subtask, then hold) rather than depend on the link for basic safety.
+</div>
+</div>
+
+<!-- ===================== 4. HARDWARE ===================== -->
+<div class="section">
+<h1>4. Hardware Stack</h1>
+<figure>
+  <img src="assets/03_hardware_stack.svg">
+  <figcaption>Figure 2 — Hardware stack for both agents, joined by the decentralized mesh link.</figcaption>
+</figure>
+<h2>4.1 UAV hardware</h2>
+<table>
+<thead><tr><th>Component</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td>USB stereo camera (640×240 side-by-side)</td><td>Primary geometric sensing — disparity/depth source</td></tr>
+<tr><td>Dedicated IMU, rigidly mounted to camera, hardware/timestamp-synced</td><td>Inertial reference for VIO; deliberately separate from Pixhawk's own IMU so vision-inertial fusion isn't subject to MAVLink latency/jitter</td></tr>
+<tr><td>1D lidar / single-point rangefinder</td><td>Range-aiding input to VIO — corrects scale/altitude drift that stereo+IMU alone is prone to over featureless surfaces</td></tr>
+<tr><td>NVIDIA Jetson Orin Nano</td><td>Companion computer — runs the entire perception/VIO/planning/safety pipeline</td></tr>
+<tr><td>Pixhawk (PX4 or ArduPilot)</td><td>Flight controller — attitude/rate control, motor mixing, hard failsafes; receives velocity setpoints via MAVLink OFFBOARD mode</td></tr>
+<tr><td>Mesh radio / Wi-Fi link</td><td>Decentralized swarm communication with the rover</td></tr>
+</tbody>
+</table>
+<h2>4.2 Rover hardware</h2>
+<table>
+<thead><tr><th>Component</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td>USB stereo camera, dedicated synced IMU, 1D lidar</td><td>Same sensing suite as the UAV — identical perception/VIO pipeline reused without modification</td></tr>
+<tr><td>Wheel encoders</td><td>Additional odometry reference unavailable to the UAV — improves rover pose reliability relative to the aerial agent</td></tr>
+<tr><td>Onboard compute (Jetson-class)</td><td>Runs the same software stack as the UAV</td></tr>
+<tr><td>Motor controller (differential drive)</td><td>Receives vehicle-agnostic velocity commands translated into wheel speeds</td></tr>
+<tr><td>Mesh radio / Wi-Fi link</td><td>Decentralized swarm communication with the UAV</td></tr>
+</tbody>
+</table>
+<div class="callout warn">
+<strong>Note on the 1D lidar:</strong> a single-point rangefinder contributes a range/altitude constraint to the state estimator. It does not perform scanning and therefore does not, by itself, support mapping — that distinction matters because it means this system is VIO/VI-SLAM with range aiding, not "lidar SLAM" in the conventional (scanning-lidar) sense.
+</div>
+</div>
+
+<!-- ===================== 5. SOFTWARE PER-AGENT ===================== -->
+<div class="section">
+<h1>5. Software Architecture — Per-Agent Pipeline</h1>
+<p>Both agents run the identical pipeline below; only the final platform adapter differs (Pixhawk/MAVLink for the UAV, a differential-drive motor controller for the rover). This identical-pipeline property is what makes the stack reusable across agent types without duplicated logic.</p>
+<figure>
+  <img src="assets/02_agent_software_pipeline.svg">
+  <figcaption>Figure 3 — Per-agent software pipeline, sensing through command output.</figcaption>
+</figure>
+
+<h2>5.1 Sensing</h2>
+<p>Raw stereo frames, IMU samples, and 1D lidar range readings are acquired with consistent timestamping so that downstream fusion can associate the right samples with the right camera frame.</p>
+
+<h2>5.2 Perception</h2>
+<p>Stereo frames are split into left/right, rectified against calibration, and passed through SGBM-class stereo matching to produce a disparity map, then converted to metric depth.</p>
+
+<h2>5.3 State Estimation — VIO / VI-SLAM</h2>
+<p>IMU samples and stereo depth are fused into a pose estimate (position + heading) via Visual-Inertial Odometry, with the 1D lidar range reading fused in as a constraint that limits drift in scale/altitude. This pose estimate is what gives each agent a notion of "where am I relative to where I started" — something pure frame-by-frame depth cannot provide.</p>
+
+<h2>5.4 Obstacle Representation</h2>
+<p>Depth is reduced to two redundant geometric views used for avoidance: an angular beam decomposition (near/far per direction) and a coarse region grid (clear / obstacle / low-confidence per zone). A local occupancy map, built from depth plus the VIO pose over a short time window, gives the planner short-horizon memory beyond a single frame.</p>
+
+<h2>5.5 Planning</h2>
+<p>Two cooperating planning concerns: <strong>exploration/coverage</strong>, which biases movement toward unexplored space using the local map and current pose, and <strong>reactive avoidance</strong>, which is the final authority on immediate obstacle clearance regardless of where exploration wants to go.</p>
+
+<h2>5.6 Safety Supervisor</h2>
+<p>An independent watchdog, gated purely on perception/VIO health (stale frames, low confidence, sensor dropout) — never on pose or task state. It can override or clamp any candidate command, including one produced by an optional learned (NN) planner, before it is allowed to reach the command output stage. See Section&nbsp;8 for the full failsafe hierarchy.</p>
+
+<h2>5.7 Command Output</h2>
+<p>The planner's output is expressed as a <strong>vehicle-agnostic command</strong> (linear + angular velocity), not a drone- or rover-specific format. A thin platform adapter converts this into Pixhawk MAVLink OFFBOARD setpoints for the UAV, or differential-drive wheel speeds for the rover. This is the abstraction that lets the same upstream pipeline serve both agent types unmodified.</p>
+</div>
+
+<!-- ===================== 6. COORDINATION ===================== -->
+<div class="section">
+<h1>6. Multi-Agent Coordination Layer</h1>
+<p>Task allocation uses a decentralized, auction/bundle-style negotiation (the same family as Consensus-Based Bundle Algorithm, CBBA) rather than a central broker: each agent computes its own cost to perform a given subtask from its current state and capability, bids are exchanged over the mesh link, and the lowest-cost capable agent wins — with no single point of failure or arbitration authority.</p>
+<figure>
+  <img src="assets/05_task_negotiation.svg">
+  <figcaption>Figure 4 — One decentralized task allocation cycle.</figcaption>
+</figure>
+<h2>6.1 Capability model</h2>
+<p>Each agent advertises a lightweight capability/cost function (e.g. distance to task, battery remaining, task-type affinity such as "aerial scan" vs. "ground retrieval") used by all agents to compute comparable bids without needing to share full internal state.</p>
+<h2>6.2 Comm link assumptions</h2>
+<p>The mesh link is assumed intermittent, not guaranteed-reliable — the negotiation protocol and each agent's local fallback behavior must tolerate dropped or delayed bid messages without deadlocking the task queue.</p>
+</div>
+
+<!-- ===================== 7. WORKFLOW ===================== -->
+<div class="section">
+<h1>7. End-to-End Workflow</h1>
+<p>Walking one task cycle end-to-end, combining Sections 5 and 6:</p>
+<ol>
+<li><strong>Task announced</strong> on the shared queue (operator-issued or generated by a higher-level mission plan).</li>
+<li><strong>Each agent bids</strong> independently, using its own capability model and current pose/battery state.</li>
+<li><strong>Bids are exchanged and resolved locally</strong> by every agent reaching the same conclusion from the same shared information — no central arbiter.</li>
+<li><strong>The winning agent executes</strong> its own full per-agent pipeline (Section 5) — sensing through command output — entirely independently of the other agent.</li>
+<li><strong>Safety supervision runs continuously</strong> throughout execution, with authority to override the planner at any point regardless of task progress.</li>
+<li><strong>Completion is broadcast</strong>, returning the agent to availability for the next task.</li>
+</ol>
+</div>
+
+<!-- ===================== 8. SAFETY ===================== -->
+<div class="section">
+<h1>8. Safety &amp; Failsafe Architecture</h1>
+<p>Safety is layered, with each layer independent of and unaware of the layers above it — a fault in planning or perception should never require the flight/motor controller's own hard failsafes to know why, only that the command stream has gone stale or out of bounds.</p>
+<figure>
+  <img src="assets/04_safety_hierarchy.svg">
+  <figcaption>Figure 5 — Safety and failsafe hierarchy, per agent.</figcaption>
+</figure>
+<h2>8.1 Command heartbeat</h2>
+<p>Following the standard PX4 OFFBOARD pattern, velocity setpoints must be streamed at a guaranteed minimum rate; if the stream stops (perception fault, software crash, comm loss), the flight/motor controller falls back to hold/land independent of any companion-computer logic.</p>
+<h2>8.2 NN sandboxing</h2>
+<p>Per the industry pattern described in Section 5.6, any learned/NN-based local planner is treated as one more candidate-command source feeding the safety supervisor — never as a trusted path directly to the command output stage. This is deliberate: it allows experimenting with learned planning without changing the safety guarantees of the system.</p>
+</div>
+
+<!-- ===================== 9. STATUS ===================== -->
+<div class="section">
+<h1>9. Current Implementation Status vs. Blueprint</h1>
+<p>The table below maps every layer in this blueprint to its actual state in the <code>depth_perception_engine</code> codebase as of this document's writing.</p>
+<table>
+<thead><tr><th>Layer</th><th>Status</th><th>Existing file(s)</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Capture / split / rectify</td><td class="status-built">Built &amp; wired</td><td>stereo/frame_splitter.py, stereo/rectification.py</td><td>Single UAV camera path, in active use</td></tr>
+<tr><td>Stereo matching (disparity)</td><td class="status-built">Built &amp; wired</td><td>stereo/disparity_engine.py</td><td>CPU SGBM; not yet validated/profiled on Orin Nano</td></tr>
+<tr><td>Depth estimation</td><td class="status-built">Built &amp; wired</td><td>depth/depth_estimator.py, depth/distance_reader.py</td><td>—</td></tr>
+<tr><td>Obstacle beams</td><td class="status-built">Built &amp; wired</td><td>fusion/threat_assessment.py</td><td>20-beam angular decomposition</td></tr>
+<tr><td>Scene grid</td><td class="status-built">Built &amp; wired</td><td>perception/scene_interpreter.py, region_analyzer.py, region_types.py</td><td>3×3 region classification</td></tr>
+<tr><td>Reactive velocity planner</td><td class="status-built">Built &amp; wired</td><td>navigation/velocity_planner.py</td><td>Outputs forward_mps / yaw_rate_dps today (drone-shaped, not yet vehicle-agnostic)</td></tr>
+<tr><td>Telemetry / run logging</td><td class="status-built">Built &amp; wired</td><td>telemetry/run_logger.py</td><td>—</td></tr>
+<tr><td>Visualization (debug)</td><td class="status-built">Built &amp; wired</td><td>visualization/overlay_renderer.py</td><td>Desk-test only, not flight-critical</td></tr>
+<tr><td>Object detection (YOLO)</td><td class="status-unwired">Removed</td><td>—</td><td>Old roadmap; deliberately excluded from current blueprint (compute budget reserved on Orin Nano). Unwired stub code (detection/yolo_detector.py, fusion/object_depth_fusion.py, fusion/region_classifier.py, yolov8n.pt) deleted during cleanup to scope the codebase to stereo perception only</td></tr>
+<tr><td>Object tracking / detection manager</td><td class="status-unwired">Removed</td><td>—</td><td>Empty stub files (detection/detection_manager.py, detection/object_tracker.py) deleted during cleanup</td></tr>
+<tr><td>Dashboard / depth viewer</td><td class="status-unwired">Removed</td><td>—</td><td>Empty stub files (visualization/dashboard.py, visualization/depth_viewer.py) deleted during cleanup</td></tr>
+<tr><td>Dedicated IMU ingestion</td><td class="status-planned">Planned</td><td>—</td><td>Hardware not yet connected</td></tr>
+<tr><td>VIO / VI-SLAM fusion</td><td class="status-planned">Planned</td><td>—</td><td>Depends on IMU ingestion</td></tr>
+<tr><td>1D lidar range fusion</td><td class="status-planned">Planned</td><td>—</td><td>Hardware not yet connected</td></tr>
+<tr><td>Local occupancy map</td><td class="status-planned">Planned</td><td>—</td><td>Depends on VIO pose</td></tr>
+<tr><td>Exploration/coverage logic</td><td class="status-planned">Planned</td><td>—</td><td>Depends on local map + pose</td></tr>
+<tr><td>Vehicle-agnostic command schema</td><td class="status-planned">Planned</td><td>—</td><td>Current planner output is drone-shaped</td></tr>
+<tr><td>Safety supervisor (formal module)</td><td class="status-planned">Partially implicit</td><td>main.py (stale-frame / too-close handling)</td><td>Logic exists inline in main.py; not yet a standalone, reusable module</td></tr>
+<tr><td>Pixhawk MAVLink bridge</td><td class="status-planned">Planned</td><td>—</td><td>No FC integration exists yet; pipeline only logs/displays commands today</td></tr>
+<tr><td>Rover stack</td><td class="status-planned">Planned</td><td>—</td><td>Not started; intended to reuse the UAV pipeline unmodified above the platform adapter</td></tr>
+<tr><td>Decentralized task allocation</td><td class="status-planned">Planned</td><td>—</td><td>Not started</td></tr>
+</tbody>
+</table>
+<p><span class="status-built">Built &amp; wired</span> = in the active main.py loop today. <span class="status-unwired">Unwired</span> = code exists but nothing imports it. <span class="status-planned">Planned</span> = blueprint only, no code yet.</p>
+</div>
+
+<!-- ===================== 10. TECH CHOICES ===================== -->
+<div class="section">
+<h1>10. Technology Choices Summary</h1>
+<table>
+<thead><tr><th>Concern</th><th>Approach / Candidate Tech</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td>Stereo matching</td><td>OpenCV SGBM (CPU today; CUDA SGBM candidate for Orin Nano)</td><td>Already implemented; CUDA port is the main open performance question for onboard deployment</td></tr>
+<tr><td>VIO / VI-SLAM</td><td>Tightly-coupled stereo-inertial filter or optimization-based backend (e.g. an OpenVINS/VINS-Fusion-class approach), with 1D lidar fused as a range constraint</td><td>Avoids dependence on GPS or on Pixhawk's own drift-prone indoor dead reckoning</td></tr>
+<tr><td>Command interface to flight controller</td><td>MAVLink OFFBOARD mode, vision pose pushed back via VISION_POSITION_ESTIMATE/ODOMETRY</td><td>Standard, well-tested pattern for vision-driven indoor PX4 flight</td></tr>
+<tr><td>Task allocation</td><td>Decentralized auction/bundle negotiation (CBBA-family)</td><td>No single point of failure; matches the heterogeneous-capability requirement</td></tr>
+<tr><td>Comm link</td><td>Mesh radio / Wi-Fi ad-hoc</td><td>Must tolerate intermittent connectivity without deadlocking task allocation</td></tr>
+<tr><td>Onboard compute</td><td>NVIDIA Jetson Orin Nano</td><td>Compute/power budget is the reason object detection (YOLO) is excluded from this blueprint</td></tr>
+<tr><td>Object detection / semantic labeling</td><td>Explicitly excluded</td><td>Reserves compute/power for VIO/SLAM and any future onboard NN planner</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ===================== 11. ROADMAP ===================== -->
+<div class="section">
+<h1>11. Phased Build Roadmap</h1>
+<figure>
+  <img src="assets/06_roadmap.svg">
+  <figcaption>Figure 6 — Phased roadmap from current state to full multi-agent system.</figcaption>
+</figure>
+<div class="phase-grid">
+  <div class="phase-card"><h4>Phase 1 — Current</h4>Single UAV, stereo-only reactive avoidance. <span class="badge badge-uav">UAV</span></div>
+  <div class="phase-card"><h4>Phase 2</h4>Dedicated IMU integrated; VIO brought online. <span class="badge badge-uav">UAV</span></div>
+  <div class="phase-card"><h4>Phase 3</h4>1D lidar added; VI-SLAM with range aiding. <span class="badge badge-uav">UAV</span></div>
+  <div class="phase-card"><h4>Phase 4</h4>Vehicle-agnostic command schema finalized; rover stack stood up reusing the same pipeline. <span class="badge badge-both">Both</span></div>
+  <div class="phase-card"><h4>Phase 5</h4>Decentralized task allocation link between agents. <span class="badge badge-both">Both</span></div>
+  <div class="phase-card"><h4>Phase 6</h4>Optional NN-assisted local planning, sandboxed behind the safety supervisor. <span class="badge badge-both">Both</span></div>
+</div>
+</div>
+
+<!-- ===================== 12. APPENDIX ===================== -->
+<div class="section">
+<h1>12. Appendix — Deferred / Out-of-Scope Items</h1>
+<div class="callout deferred">
+<strong>Object detection / semantic labeling (YOLO):</strong> deliberately excluded from this blueprint. Reasoning: obstacle avoidance only requires geometry, not object identity, and the compute/power this would consume on the Jetson Orin Nano is reserved for VIO/SLAM and any future onboard NN planner. The built-but-unwired legacy code from an earlier roadmap (<code>detection/</code>, <code>fusion/object_depth_fusion.py</code>, <code>fusion/region_classifier.py</code>, <code>yolov8n.pt</code>) has been removed from the codebase to keep it scoped to stereo perception only; revisit by reintroducing this work if the constraint changes.
+</div>
+<div class="callout deferred">
+<strong>Full SLAM with loop closure / persistent mapping:</strong> not adopted by default. The blueprint specifies lightweight, local (rolling-window) mapping sufficient for single-room exploration and avoidance. Full pose-graph SLAM with loop closure is heavier and only justified if a future mission layer genuinely requires a persistent, revisitable map — to be revisited if that need materializes.
+</div>
+<div class="callout deferred">
+<strong>End-to-end NN control (sensor input directly to motor output):</strong> not adopted. Industry practice — and this blueprint — keeps any NN strictly as one candidate-command source behind an independent, non-learned safety supervisor (Section 8.2), never as a trusted direct path to actuation.
+</div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,27 @@
+digraph Roadmap {
+    rankdir=LR;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=11, margin="0.18,0.12"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Phased Build Roadmap";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    P1 [label="Phase 1\nSingle UAV\nReactive Avoidance\n(stereo only)", fillcolor="#dcfce7", color="#16a34a", fontcolor="#14532d"];
+    P2 [label="Phase 2\n+ Dedicated IMU\nVIO Integration", fillcolor="#fef3c7", color="#d97706", fontcolor="#78350f"];
+    P3 [label="Phase 3\n+ 1D Lidar\nVI-SLAM w/ Range Aiding", fillcolor="#fef3c7", color="#d97706", fontcolor="#78350f"];
+    P4 [label="Phase 4\nVehicle-Agnostic\nCommand + Rover Stack", fillcolor="#dbeafe", color="#2563eb", fontcolor="#1e3a8a"];
+    P5 [label="Phase 5\nDecentralized\nTask Allocation Link", fillcolor="#ede9fe", color="#7c3aed", fontcolor="#4c1d95"];
+    P6 [label="Phase 6\nNN-Assisted Planning\n(behind safety supervisor)", fillcolor="#fee2e2", color="#dc2626", fontcolor="#7f1d1d"];
+
+    P1 -> P2 -> P3 -> P4 -> P5 -> P6;
+
+    Status [label="● = current repo state", shape=plaintext, fontsize=10, fontcolor="#16a34a"];
+    Status -> P1 [style=invis];
+}

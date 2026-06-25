@@ -1,0 +1,57 @@
+digraph HardwareStack {
+    rankdir=TB;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=11, margin="0.16,0.1"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Hardware Stack — UAV and Rover Agents";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    subgraph cluster_uavhw {
+        label="UAV Hardware";
+        style="rounded,filled"; color="#fde68a"; fillcolor="#fffbeb"; fontsize=13;
+
+        U_Cam [label="USB Stereo Camera\n(640x240 SBS)", fillcolor="#fef3c7", color="#f59e0b"];
+        U_IMU [label="Dedicated IMU\n(camera-mounted, time-synced)", fillcolor="#fef3c7", color="#f59e0b"];
+        U_Lidar [label="1D Lidar / Rangefinder", fillcolor="#fef3c7", color="#f59e0b"];
+        U_Compute [label="Jetson Orin Nano\n(companion computer)", fillcolor="#fde68a", color="#b45309"];
+        U_FC [label="Pixhawk\n(flight controller)", fillcolor="#fde68a", color="#b45309"];
+        U_Radio [label="Mesh Radio / Wi-Fi\n(swarm comm)", fillcolor="#fde68a", color="#b45309"];
+        U_Motors [label="ESCs + Motors"];
+
+        U_Cam -> U_Compute;
+        U_IMU -> U_Compute;
+        U_Lidar -> U_Compute;
+        U_Compute -> U_FC [label="  MAVLink (USB/UART)"];
+        U_FC -> U_Motors;
+        U_Compute -> U_Radio;
+    }
+
+    subgraph cluster_roverhw {
+        label="Rover Hardware";
+        style="rounded,filled"; color="#bbf7d0"; fillcolor="#f0fdf4"; fontsize=13;
+
+        R_Cam [label="USB Stereo Camera"];
+        R_IMU [label="Dedicated IMU\n(camera-mounted, time-synced)"];
+        R_Lidar [label="1D Lidar / Rangefinder"];
+        R_Enc [label="Wheel Encoders"];
+        R_Compute [label="Onboard Compute\n(Jetson-class)", fillcolor="#bbf7d0", color="#15803d"];
+        R_MC [label="Motor Controller\n(differential drive)", fillcolor="#bbf7d0", color="#15803d"];
+        R_Radio [label="Mesh Radio / Wi-Fi\n(swarm comm)", fillcolor="#bbf7d0", color="#15803d"];
+
+        R_Cam -> R_Compute;
+        R_IMU -> R_Compute;
+        R_Lidar -> R_Compute;
+        R_Enc -> R_Compute;
+        R_Compute -> R_MC [label="  serial/CAN"];
+        R_Compute -> R_Radio;
+    }
+
+    U_Radio -> R_Radio [dir=both, color="#8b5cf6", label="  decentralized link", fontcolor="#6d28d9", constraint=false];
+}

@@ -1,0 +1,34 @@
+digraph TaskNegotiation {
+    rankdir=TB;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=11, margin="0.16,0.1"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Decentralized Task Allocation Cycle (auction/bundle-style negotiation)";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    Announce [label="1. Task Announced\n(e.g. \"scan aisle 4\", \"retrieve item X\")", fillcolor="#dbeafe", color="#3b82f6"];
+    Bid_UAV  [label="2a. UAV computes bid\n(cost = capability + position + battery)", fillcolor="#fef3c7", color="#f59e0b"];
+    Bid_Rover[label="2b. Rover computes bid\n(cost = capability + position + battery)", fillcolor="#dcfce7", color="#22c55e"];
+    Exchange [label="3. Bids exchanged over mesh link\n(no central broker)", fillcolor="#ede9fe", color="#8b5cf6"];
+    Consensus[label="4. Local consensus\n(lowest-cost capable agent wins)", fillcolor="#ede9fe", color="#8b5cf6"];
+    Award    [label="5. Subtask awarded + acknowledged", fillcolor="#e2e8f0", color="#64748b"];
+    Execute  [label="6. Winning agent executes\n(perception → SLAM → plan → command)", fillcolor="#f8fafc", color="#334155"];
+    Report   [label="7. Completion / status broadcast\nto re-enter task queue", fillcolor="#f1f5f9", color="#334155"];
+
+    Announce -> Bid_UAV;
+    Announce -> Bid_Rover;
+    Bid_UAV -> Exchange;
+    Bid_Rover -> Exchange;
+    Exchange -> Consensus;
+    Consensus -> Award;
+    Award -> Execute;
+    Execute -> Report;
+    Report -> Announce [style=dashed, label="  next task"];
+}

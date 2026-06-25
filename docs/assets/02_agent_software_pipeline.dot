@@ -1,0 +1,83 @@
+digraph AgentPipeline {
+    rankdir=LR;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=11, margin="0.16,0.1"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Per-Agent Software Pipeline (identical structure for UAV and Rover)";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    subgraph cluster_sense {
+        label="Sensing";
+        style="rounded,filled"; color="#fcd34d"; fillcolor="#fffbeb"; fontsize=12;
+        Stereo [label="Stereo Camera", fillcolor="#fef3c7", color="#f59e0b"];
+        IMU    [label="Dedicated IMU\n(camera-synced)", fillcolor="#fef3c7", color="#f59e0b"];
+        Lidar  [label="1D Lidar\n(range aid)", fillcolor="#fef3c7", color="#f59e0b"];
+    }
+
+    subgraph cluster_perc {
+        label="Perception";
+        style="rounded,filled"; color="#93c5fd"; fillcolor="#eff6ff"; fontsize=12;
+        Split [label="Split / Rectify", fillcolor="#dbeafe", color="#3b82f6"];
+        Disp  [label="Disparity (SGBM)", fillcolor="#dbeafe", color="#3b82f6"];
+        Depth [label="Depth Estimation", fillcolor="#dbeafe", color="#3b82f6"];
+        Split -> Disp -> Depth;
+    }
+
+    subgraph cluster_state {
+        label="State Estimation";
+        style="rounded,filled"; color="#c4b5fd"; fillcolor="#f5f3ff"; fontsize=12;
+        VIO [label="VIO / VI-SLAM\n(+ lidar range aiding)", fillcolor="#ede9fe", color="#8b5cf6"];
+    }
+
+    subgraph cluster_obs {
+        label="Obstacle Representation";
+        style="rounded,filled"; color="#fca5a5"; fillcolor="#fef2f2"; fontsize=12;
+        Beams [label="Angular Beams\n(threat_assessment)", fillcolor="#fee2e2", color="#ef4444"];
+        Grid  [label="Scene Grid\n(scene_interpreter)", fillcolor="#fee2e2", color="#ef4444"];
+        LocalMap [label="Local Occupancy Map", fillcolor="#fee2e2", color="#ef4444"];
+    }
+
+    subgraph cluster_plan {
+        label="Planning";
+        style="rounded,filled"; color="#6ee7b7"; fillcolor="#ecfdf5"; fontsize=12;
+        Explore [label="Exploration /\nCoverage Logic"];
+        Planner [label="Velocity Planner\n(reactive avoidance)"];
+        Explore -> Planner [style=invis];
+    }
+
+    subgraph cluster_safety {
+        label="Safety";
+        style="rounded,filled"; color="#fdba74"; fillcolor="#fff7ed"; fontsize=12;
+        Watchdog [label="Safety Supervisor\n(perception-health watchdog)", fillcolor="#ffedd5", color="#f97316"];
+    }
+
+    subgraph cluster_cmd {
+        label="Command Output";
+        style="rounded,filled"; color="#94a3b8"; fillcolor="#f8fafc"; fontsize=12;
+        NavCmd  [label="Vehicle-Agnostic\nNavCommand", fillcolor="#e2e8f0", color="#64748b"];
+        Adapter [label="Platform Adapter\n(Pixhawk MAVLink /\nMotor Controller)", fillcolor="#e2e8f0", color="#64748b"];
+        NavCmd -> Adapter;
+    }
+
+    Stereo -> Split;
+    Stereo -> VIO;
+    IMU -> VIO;
+    Lidar -> VIO;
+    Depth -> Beams;
+    Depth -> Grid;
+    VIO -> LocalMap;
+    Beams -> LocalMap [style=invis];
+    Beams -> Planner;
+    Grid -> Explore;
+    LocalMap -> Explore;
+    Explore -> Planner;
+    Planner -> Watchdog;
+    Watchdog -> NavCmd [label="  override on fault", fontcolor="#b45309"];
+}

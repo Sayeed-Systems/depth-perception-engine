@@ -1,0 +1,64 @@
+digraph SystemOverview {
+    rankdir=TB;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=12, margin="0.18,0.12"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Warehouse Automation Stack — System-Level Overview";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    subgraph cluster_task {
+        label="Task Allocation & Coordination Layer";
+        style="rounded,filled";
+        color="#cbd5e1";
+        fillcolor="#eef2f7";
+        fontsize=13;
+        fontcolor="#1f2937";
+
+        Task   [label="Warehouse Task Queue\n(e.g. inventory scan, item retrieval)", fillcolor="#dbeafe", color="#3b82f6"];
+        Negot  [label="Decentralized Capability\nNegotiation (auction/bid)", fillcolor="#dbeafe", color="#3b82f6"];
+        Task -> Negot;
+    }
+
+    subgraph cluster_uav {
+        label="UAV Agent";
+        style="rounded,filled";
+        color="#fde68a";
+        fillcolor="#fffbeb";
+        fontsize=13;
+        fontcolor="#1f2937";
+
+        UAVStack [label="Perception → VIO/SLAM →\nPlanning → Safety → Command", fillcolor="#fef3c7", color="#f59e0b"];
+        UAVFC    [label="Pixhawk Flight Controller\n(MAVLink)", fillcolor="#fef3c7", color="#f59e0b"];
+        UAVStack -> UAVFC [label="  velocity setpoints"];
+        UAVFC -> UAVStack [label="  pose feedback  ", style=dashed];
+    }
+
+    subgraph cluster_rover {
+        label="Ground Rover Agent";
+        style="rounded,filled";
+        color="#bbf7d0";
+        fillcolor="#f0fdf4";
+        fontsize=13;
+        fontcolor="#1f2937";
+
+        RoverStack [label="Perception → VIO/SLAM →\nPlanning → Safety → Command", fillcolor="#dcfce7", color="#22c55e"];
+        RoverMC    [label="Motor Controller\n(differential drive)", fillcolor="#dcfce7", color="#22c55e"];
+        RoverStack -> RoverMC [label="  velocity setpoints"];
+        RoverMC -> RoverStack [label="  odometry feedback  ", style=dashed];
+    }
+
+    Comm [label="Decentralized Swarm\nComm Link (mesh)", shape=ellipse, fillcolor="#ede9fe", color="#8b5cf6"];
+
+    Negot -> UAVStack [label="  subtask assignment"];
+    Negot -> RoverStack [label="  subtask assignment"];
+    UAVStack -> Comm [dir=both, color="#8b5cf6"];
+    RoverStack -> Comm [dir=both, color="#8b5cf6"];
+    Comm -> Negot [dir=both, color="#8b5cf6", style=dashed];
+}

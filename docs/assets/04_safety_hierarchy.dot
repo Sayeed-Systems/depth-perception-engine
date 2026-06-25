@@ -1,0 +1,31 @@
+digraph SafetyHierarchy {
+    rankdir=TB;
+    splines="line";
+    nodesep=0.35;
+    ranksep=0.5;
+    bgcolor="transparent";
+    fontname="Helvetica";
+    node [fontname="Helvetica", style="filled,rounded", shape=box, fontsize=11, margin="0.16,0.1"];
+    edge [fontname="Helvetica", fontsize=10, color="#5b6472"];
+
+    labelloc="t";
+    label="Safety & Failsafe Hierarchy (per agent)";
+    fontsize=18;
+    fontcolor="#1f2937";
+
+    FCFail [label="Flight-Controller / Motor-Controller\nHard Failsafes\n(RC loss, geofence, battery, E-stop)", fillcolor="#fee2e2", color="#dc2626", fontcolor="#7f1d1d"];
+    SoftWatch [label="Companion-Computer Safety Supervisor\n(perception-health watchdog)", fillcolor="#ffedd5", color="#ea580c"];
+    CmdStream [label="Command Heartbeat\n(NavCommand at ≥ fixed rate)", fillcolor="#fef3c7", color="#d97706"];
+    Planner [label="Exploration / Avoidance Planner", fillcolor="#dbeafe", color="#2563eb"];
+    NN [label="(Optional) Learned Local Planner", fillcolor="#ede9fe", color="#7c3aed", style="filled,rounded,dashed"];
+    Sensors [label="Perception / VIO Health\n(stale frames, low confidence, sensor dropout)", fillcolor="#dcfce7", color="#16a34a"];
+
+    Sensors -> SoftWatch [label="  health signal"];
+    Planner -> SoftWatch [label="  candidate command"];
+    NN -> SoftWatch [label="  candidate command", style=dashed];
+    SoftWatch -> CmdStream [label="  clamped/overridden command"];
+    CmdStream -> FCFail [label="  OFFBOARD setpoints"];
+    FCFail -> FCFail [label="  fallback: hold/land\nif stream lost", style=dashed];
+
+    {rank=same; Planner; NN;}
+}
