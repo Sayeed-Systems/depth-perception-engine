@@ -6,3 +6,10 @@ runs/
 .claude/
 ssh
 ssh.pub
+
+# packaging / test artifacts (added when depth_perception_engine became an
+# installable src-layout package)
+*.egg-info/
+build/
+dist/
+.pytest_cache/

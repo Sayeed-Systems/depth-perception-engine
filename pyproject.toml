@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "depth-perception-engine"
+version = "0.1.0"
+description = "Standalone, ROS-free stereo depth / traversability / obstacle perception library."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "MP-01 Project" },
+]
+
+# Deliberately opencv-python-headless, not opencv-python: nothing in the
+# library ever calls cv2.imshow/waitKey/named window functions, so it has
+# no reason to require a GUI-capable OpenCV build. See "examples" below for
+# where the GUI dependency actually belongs.
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python-headless>=4.7",
+]
+
+[project.optional-dependencies]
+# NOTE on examples/live_demo.py's cv2.imshow/VideoCapture: opencv-python and
+# opencv-python-headless both install the same top-level `cv2` module and
+# cannot be installed together. If you need the GUI demo, swap the core
+# dependency yourself:
+#   pip uninstall opencv-python-headless && pip install opencv-python
+# There is deliberately no "examples" extra here that would install both.
+test = [
+    "pytest>=7.0",
+]
+dev = [
+    "depth-perception-engine[test]",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
