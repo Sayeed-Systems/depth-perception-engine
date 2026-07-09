@@ -13,6 +13,79 @@ structural refactor, not an algorithm rewrite.
 
 ![Demo](docs/assets/demo.gif)
 
+## Refactor: before → after
+
+The library was restructured from a single flat script into an installable
+package. No algorithm, threshold, or tuned parameter changed — only where
+the code lives and how it's called.
+
+**Before** — one entry point, ten flat top-level folders, camera/GUI/disk
+code mixed in with the algorithm, no tests, not installable:
+
+```
+depth_perception_engine/
+├── main.py                       # camera + GUI + algorithm, all in one loop
+├── stereo/                       # rectification.py had a hardcoded default XML path
+├── depth/                        # depth_estimator.py duplicated rectification.py's
+│                                  # calibration-loading code
+├── perception/                   # name didn't describe what it did
+├── fusion/threat_assessment.py   # actually obstacle detection, not fusion
+├── navigation/velocity_planner.py
+├── visualization/overlay_renderer.py
+├── telemetry/run_logger.py
+└── config/stereo_calibration.xml
+
+no tests/, no pyproject.toml, not pip-installable
+```
+
+**After** — an installable package with a clear library/example boundary:
+
+```
+depth_perception_engine/
+├── pyproject.toml                # pip install -e .
+├── src/depth_perception_engine/
+│   ├── calibration/               # new — one file-loading path, no hardcoded default
+│   ├── stereo/
+│   ├── depth/
+│   ├── traversability/            # renamed from perception/ — matches what it does
+│   ├── obstacles/                 # renamed from fusion/threat_assessment.py
+│   ├── fusion/                    # new — result assembly + confidence scoring
+│   ├── config/                    # new — PipelineConfig dataclass
+│   ├── models/                    # new — typed results, no bare dicts
+│   ├── utils/                     # new — shared validation/timing helpers
+│   └── pipeline/                  # new — the public entry point
+├── examples/
+│   ├── live_demo.py               # was main.py
+│   ├── synthetic_demo.py          # new — no camera, no GUI
+│   ├── navigation/
+│   ├── visualization/
+│   └── telemetry/
+└── tests/                          # new — 19 tests
+```
+
+Operations performed:
+
+| # | Change |
+|---|---|
+| 1 | Extracted calibration file-loading into `calibration/`, removing duplicated `cv2.FileStorage` parsing from both `rectification.py` and `depth_estimator.py` |
+| 2 | Removed the hardcoded default calibration path baked into `RectificationEngine` — every entry point now requires a `StereoCalibration` object passed in explicitly |
+| 3 | Renamed `perception/` → `traversability/` and `fusion/threat_assessment.py` → `obstacles/` to match what each module actually computes |
+| 4 | Wrapped every previously loose dict (`beams`, `scene`, distance measurements) in a typed dataclass: `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading` |
+| 5 | Added `PipelineConfig` — every tunable threshold that used to be a loose module-level constant in `main.py`, now one dataclass |
+| 6 | Added `pipeline.DepthPerceptionPipeline` (stateful, holds engines across frames) and five stateless functions (`compute_disparity`, `estimate_depth`, `classify_traversability`, `detect_obstacles`, `process_stereo_pair`) as the public API |
+| 7 | Moved camera capture, `cv2` GUI overlays, flight-command velocity planning, and disk telemetry logging into `examples/` — none of it is reachable from the library |
+| 8 | Added `pyproject.toml` (src-layout, `opencv-python-headless` for the library core so it never pulls in a GUI-capable OpenCV build) |
+| 9 | Added `tests/` (19 tests): every module imports cleanly, the pipeline builds and runs, every output is the documented structured type, and no `rclpy`/`sensor_msgs`/`cv_bridge`/camera/GUI dependency exists anywhere under `src/` |
+| 10 | Added `docs/INTEGRATION_READINESS.md`, describing exactly how this library will be called from ROS2's `mp01_perception` package later |
+
+| | Before | After |
+|---|---|---|
+| Entry point | `main.py`, one script | `pip install -e .` + `DepthPerceptionPipeline` |
+| Lines (algorithm code) | 3,335, flat | 2,565 in `src/`, 1,206 in `examples/` |
+| Tests | none | 19 |
+| ROS/camera/GUI coupling | mixed into the algorithm modules | isolated to `examples/`, verified absent from `src/` |
+| Calibration loading | duplicated, hardcoded default path | one function, no default, caller supplies the path |
+
 ## Install
 
 ```bash
