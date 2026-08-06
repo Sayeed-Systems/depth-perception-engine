@@ -24,6 +24,8 @@ from depth_perception_engine.models import (
     BeamReading,
     DepthPerceptionResult,
     ObstacleAssessment,
+    PipelineHealth,
+    StereoObservation,
     TraversabilityResult,
 )
 from depth_perception_engine.pipeline import (
@@ -49,6 +51,8 @@ __all__ = [
     "TraversabilityResult",
     "ObstacleAssessment",
     "BeamReading",
+    "StereoObservation",
+    "PipelineHealth",
     # pipeline
     "DepthPerceptionPipeline",
     "process_stereo_pair",

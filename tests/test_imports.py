@@ -54,6 +54,7 @@ def test_top_level_public_api_is_exposed():
         "TraversabilityResult",
         "ObstacleAssessment",
         "BeamReading",
+        "StereoObservation",
         "DepthPerceptionPipeline",
         "process_stereo_pair",
         "compute_disparity",

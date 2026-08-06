@@ -9,11 +9,14 @@ place).
 """
 
 import numpy as np
+import pytest
 
 from depth_perception_engine.models import (
     BeamReading,
     DepthPerceptionResult,
     ObstacleAssessment,
+    PipelineHealth,
+    StereoObservation,
     TraversabilityResult,
 )
 from depth_perception_engine.pipeline import DepthPerceptionPipeline
@@ -137,3 +140,143 @@ class TestRectificationFailureInvalidatesTheFrame:
         result = pipeline.process(left, right)
 
         assert isinstance(result, DepthPerceptionResult)
+
+
+class TestFromConfig:
+    def test_from_config_is_equivalent_to_constructor(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline.from_config(config, calibration)
+        left, right = stereo_pair
+        result = pipeline.process(left, right)
+        assert isinstance(result, DepthPerceptionResult)
+
+
+class TestValidityMasks:
+    def test_masks_match_disparity_and_depth_sign_convention(
+        self, config, calibration, stereo_pair,
+    ):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        result = pipeline.process(left, right)
+
+        assert result.valid_disparity_mask.shape == result.disparity_map.shape
+        assert result.valid_disparity_mask.dtype == np.bool_
+        np.testing.assert_array_equal(
+            result.valid_disparity_mask, result.disparity_map > 0
+        )
+
+        assert result.valid_depth_mask.shape == result.depth_map.shape
+        assert result.valid_depth_mask.dtype == np.bool_
+        np.testing.assert_array_equal(result.valid_depth_mask, result.depth_map > 0)
+
+
+class TestTimestampPassthrough:
+    def test_left_timestamp_wins_when_both_given(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        result = pipeline.process(left, right, left_timestamp=1.0, right_timestamp=2.0)
+        assert result.timestamp == 1.0
+
+    def test_right_timestamp_used_when_left_missing(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        result = pipeline.process(left, right, right_timestamp=2.0)
+        assert result.timestamp == 2.0
+
+    def test_timestamp_defaults_to_none(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        result = pipeline.process(left, right)
+        assert result.timestamp is None
+
+
+class TestProcessObservation:
+    def test_process_observation_matches_direct_process_call(
+        self, config, calibration, stereo_pair,
+    ):
+        left, right = stereo_pair
+        obs = StereoObservation(
+            left_image=left, right_image=right,
+            left_timestamp=5.0, right_timestamp=5.1, frame_id="f0",
+        )
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        result = pipeline.process_observation(obs)
+
+        assert isinstance(result, DepthPerceptionResult)
+        assert result.timestamp == 5.0
+
+
+class TestLifecycle:
+    def test_health_before_any_process_call(self, config, calibration):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        health = pipeline.health()
+
+        assert isinstance(health, PipelineHealth)
+        assert health.is_closed is False
+        assert health.frames_processed == 0
+        assert health.last_confidence is None
+        assert health.last_processing_time_ms is None
+
+    def test_health_reflects_last_processed_frame(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+
+        pipeline.process(left, right)
+        pipeline.process(left, right)
+        health = pipeline.health()
+
+        assert health.frames_processed == 2
+        assert health.last_confidence is not None
+        assert health.last_processing_time_ms is not None
+
+    def test_reset_clears_frame_count_and_last_metrics(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        pipeline.process(left, right)
+
+        pipeline.reset()
+        health = pipeline.health()
+
+        assert health.frames_processed == 0
+        assert health.last_confidence is None
+        assert health.last_processing_time_ms is None
+
+    def test_reset_does_not_affect_config_or_calibration(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        pipeline.process(left, right)
+
+        pipeline.reset()
+
+        assert pipeline.config is config
+        assert pipeline.calibration is calibration
+        # Still fully usable after reset.
+        result = pipeline.process(left, right)
+        assert isinstance(result, DepthPerceptionResult)
+
+    def test_close_then_process_raises(self, config, calibration, stereo_pair):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        left, right = stereo_pair
+        pipeline.close()
+
+        with pytest.raises(RuntimeError):
+            pipeline.process(left, right)
+
+    def test_close_then_reset_raises(self, config, calibration):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        pipeline.close()
+
+        with pytest.raises(RuntimeError):
+            pipeline.reset()
+
+    def test_close_is_idempotent(self, config, calibration):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        pipeline.close()
+        pipeline.close()  # must not raise
+
+        assert pipeline.health().is_closed is True
+
+    def test_close_reflected_in_health(self, config, calibration):
+        pipeline = DepthPerceptionPipeline(config, calibration)
+        pipeline.close()
+
+        assert pipeline.health().is_closed is True

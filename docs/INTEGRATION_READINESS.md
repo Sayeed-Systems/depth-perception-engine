@@ -1,9 +1,18 @@
 # Integration Readiness — mp01_perception (ROS2)
 
-Status: this library is ready to be imported. **No integration has been
-performed yet** — `mp01_ws` is untouched. This document describes exactly
-what that integration will look like when it happens, so it can be done
-without re-deriving the design.
+> **STATUS UPDATE (2026-08-05, baseline recovery pass):** the integration
+> described below has since actually happened — `mp01_perception`'s
+> `PerceptionProcessor`/`PerceptionNode` already construct one
+> `DepthPerceptionPipeline` and call `.process()` per frame, not the toy
+> pass-through shown in this doc's original "today" snippet. This document
+> is kept as-is below for its historical design rationale (still accurate —
+> the actual integration followed this plan) rather than rewritten; see
+> `docs/IMPLEMENTATION_STATUS.md` in this repo for what's current.
+
+Status (as originally written): this library is ready to be imported. **No
+integration has been performed yet** — `mp01_ws` is untouched. This document
+describes exactly what that integration will look like when it happens, so
+it can be done without re-deriving the design.
 
 ## The seam, recap
 

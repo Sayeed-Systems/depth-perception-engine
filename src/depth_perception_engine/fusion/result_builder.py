@@ -43,8 +43,16 @@ def build_result(
     traversability: TraversabilityResult,
     obstacles: ObstacleAssessment,
     processing_time_ms: float,
+    timestamp=None,
 ) -> DepthPerceptionResult:
-    """Assemble the final structured pipeline output."""
+    """Assemble the final structured pipeline output.
+
+    valid_disparity_mask/valid_depth_mask are computed here (not left
+    implicit) from this codebase's one, universal invalid-value convention
+    — disparity <= 0, depth == 0 — used identically by DisparityEngine,
+    DepthEstimator, and RegionAnalyzer already; see
+    docs/DATA_CONTRACTS.md.
+    """
     return DepthPerceptionResult(
         disparity_map=disparity_map,
         depth_map=depth_map,
@@ -52,4 +60,7 @@ def build_result(
         obstacles=obstacles,
         confidence=aggregate_confidence(traversability),
         processing_time_ms=processing_time_ms,
+        valid_disparity_mask=disparity_map > 0,
+        valid_depth_mask=depth_map > 0,
+        timestamp=timestamp,
     )

@@ -112,11 +112,22 @@ result = pipeline.process(left_image, right_image)   # call per frame — both p
 
 result.disparity_map          # float32 (H, W)
 result.depth_map              # float32 (H, W), metres
+result.valid_disparity_mask   # bool (H, W) — disparity_map > 0
+result.valid_depth_mask       # bool (H, W) — depth_map > 0
 result.traversability_mask    # TraversabilityResult: per-region grid + NavigationDecision
 result.obstacles              # ObstacleAssessment: per-beam nearest-obstacle scan
 result.confidence              # float, 0..1
 result.processing_time_ms     # float
+result.timestamp              # Optional[float] — only set if you pass left_timestamp/right_timestamp
+
+pipeline.health()              # PipelineHealth: is_closed, frames_processed, last_confidence, ...
+pipeline.reset()                # clears cross-frame smoothing state, keeps calibration/config
+pipeline.close()                # marks the pipeline unusable; further process() calls raise
 ```
+
+`from_config()` and `process_observation()` are also available for callers
+that prefer that shape — see `docs/DATA_CONTRACTS.md`'s `StereoObservation`
+section. Both are equivalent to the constructor/`process()` calls above.
 
 See [`examples/synthetic_demo.py`](examples/synthetic_demo.py) for this
 same call shape run standalone (no camera), and
@@ -222,11 +233,19 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-19 tests: every module imports cleanly, `DepthPerceptionPipeline` can be
-built and `.process()`d (including repeated calls, and rejecting mismatched
-stereo pairs), every output field is the documented structured type (never
-a bare dict), and — the requirement this whole refactor exists for — no ROS
-dependency exists anywhere in the library.
+131 tests (grew from the 19 the src/ refactor above originally added, most
+recently in a 2026-08-05 baseline-recovery pass — see
+`docs/VALIDATION_REPORT.md`): every module imports cleanly,
+`DepthPerceptionPipeline` can be built and `.process()`d (including
+repeated calls, its full lifecycle — `reset()`/`close()`/`health()` — and
+rejecting mismatched stereo pairs), every output field is the documented
+structured type (never a bare dict), depth math is verified both
+differentially against OpenCV and against independent hand-computed known
+values, and — the requirement this whole refactor exists for — no ROS
+dependency exists anywhere in the library. See `docs/ARCHITECTURE.md`,
+`docs/DATA_CONTRACTS.md`, and `docs/CALIBRATION.md` for the full module
+boundaries, output contracts, and calibration conventions;
+`docs/IMPLEMENTATION_STATUS.md` for what's implemented versus deferred.
 
 ## Status
 

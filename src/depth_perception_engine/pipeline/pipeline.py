@@ -32,7 +32,12 @@ from depth_perception_engine.calibration.models import StereoCalibration
 from depth_perception_engine.config.pipeline_config import PipelineConfig
 from depth_perception_engine.depth.depth_estimator import DepthEstimator
 from depth_perception_engine.fusion.result_builder import build_result, to_obstacle_assessment
-from depth_perception_engine.models.result import DepthPerceptionResult, TraversabilityResult
+from depth_perception_engine.models.result import (
+    DepthPerceptionResult,
+    PipelineHealth,
+    StereoObservation,
+    TraversabilityResult,
+)
 from depth_perception_engine.obstacles.threat_assessment import ThreatAssessor
 from depth_perception_engine.stereo.disparity_engine import DisparityEngine
 from depth_perception_engine.stereo.rectification import RectificationEngine
@@ -85,7 +90,17 @@ class DepthPerceptionPipeline:
         # Holds per-beam EMA/debounce state across process() calls — this is
         # the whole reason DepthPerceptionPipeline exists as a persistent
         # object instead of a function.
-        self._threat_assessor = ThreatAssessor(
+        self._threat_assessor = self._build_threat_assessor()
+
+        self._closed = False
+        self._frames_processed = 0
+        self._last_confidence: Optional[float] = None
+        self._last_processing_time_ms: Optional[float] = None
+
+    # ------------------------------------------------------------------
+    def _build_threat_assessor(self) -> ThreatAssessor:
+        config = self._config
+        return ThreatAssessor(
             n_beams=config.n_beams,
             clear_m=config.clear_distance_m,
             caution_m=config.caution_distance_m,
@@ -98,23 +113,54 @@ class DepthPerceptionPipeline:
         )
 
     # ------------------------------------------------------------------
-    def process(self, left_image: np.ndarray, right_image: np.ndarray) -> DepthPerceptionResult:
+    @classmethod
+    def from_config(
+        cls,
+        config: PipelineConfig,
+        calibration: StereoCalibration,
+        rectify: bool = True,
+    ) -> "DepthPerceptionPipeline":
+        """Alternate constructor, identical to DepthPerceptionPipeline(config,
+        calibration, rectify) — provided for symmetry with other engine-style
+        APIs; the plain constructor remains equally valid."""
+        return cls(config, calibration, rectify=rectify)
+
+    # ------------------------------------------------------------------
+    def process(
+        self,
+        left_image: np.ndarray,
+        right_image: np.ndarray,
+        left_timestamp: Optional[float] = None,
+        right_timestamp: Optional[float] = None,
+    ) -> DepthPerceptionResult:
         """Run one stereo pair through the full pipeline.
 
         Args:
             left_image, right_image: NumPy stereo pair (BGR or grayscale),
                 already split — this does not split a combined frame (see
                 stereo.FrameSplitter if the caller still needs that).
+            left_timestamp, right_timestamp: Optional, opaque caller-defined
+                floats, carried through unmodified onto the returned
+                result's `timestamp` field (left_timestamp wins if both are
+                given). This library performs no synchronization or skew
+                checking on them — purely a pass-through convenience so a
+                caller doesn't have to track timestamps out-of-band.
 
         Returns:
             A DepthPerceptionResult.
 
         Raises:
+            RuntimeError: If called after close().
             ValueError, RuntimeError: Propagated unchanged from
                 RectificationEngine.rectify() (when rectify=True) on a
                 rectification failure — see the comment at that call site
                 for why this is not caught and silently degraded here.
         """
+        if self._closed:
+            raise RuntimeError(
+                "DepthPerceptionPipeline.process() called after close() — "
+                "construct a new pipeline instead of reusing a closed one."
+            )
         require_matching_stereo_pair(left_image, right_image)
         t0 = time.perf_counter()
 
@@ -159,7 +205,79 @@ class DepthPerceptionPipeline:
         )
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        return build_result(raw_disparity, depth_map, traversability, obstacles, elapsed_ms)
+        result_timestamp = left_timestamp if left_timestamp is not None else right_timestamp
+        result = build_result(
+            raw_disparity, depth_map, traversability, obstacles, elapsed_ms,
+            timestamp=result_timestamp,
+        )
+
+        self._frames_processed += 1
+        self._last_confidence = result.confidence
+        self._last_processing_time_ms = result.processing_time_ms
+
+        return result
+
+    # ------------------------------------------------------------------
+    def process_observation(self, observation: StereoObservation) -> DepthPerceptionResult:
+        """Convenience wrapper: unpack a StereoObservation and call process().
+
+        Equivalent to
+        ``process(observation.left_image, observation.right_image,
+        observation.left_timestamp, observation.right_timestamp)`` — provided
+        for callers that prefer passing one value instead of four.
+        """
+        return self.process(
+            observation.left_image,
+            observation.right_image,
+            left_timestamp=observation.left_timestamp,
+            right_timestamp=observation.right_timestamp,
+        )
+
+    # ------------------------------------------------------------------
+    def reset(self) -> None:
+        """Clear all cross-frame state and start over.
+
+        Only ThreatAssessor carries cross-frame state (per-beam EMA/debounce
+        — see __init__) — this rebuilds it fresh from the same config, so a
+        long stereo dropout or a scene cut doesn't leave stale smoothed
+        readings influencing the next several frames. Does not affect
+        calibration, config, or rectification maps. Raises RuntimeError if
+        called after close(), matching process()'s own post-close behavior.
+        """
+        if self._closed:
+            raise RuntimeError("DepthPerceptionPipeline.reset() called after close().")
+        self._threat_assessor = self._build_threat_assessor()
+        self._frames_processed = 0
+        self._last_confidence = None
+        self._last_processing_time_ms = None
+
+    # ------------------------------------------------------------------
+    def close(self) -> None:
+        """Mark this pipeline as no longer usable.
+
+        No hardware/file handles are held by this pipeline today (rectification
+        maps and the SGBM matcher are plain in-memory OpenCV objects), so this
+        is currently a pure state transition — but it establishes a real
+        lifecycle contract: process()/reset() raise RuntimeError afterward,
+        rather than that being undefined behavior. Idempotent — closing an
+        already-closed pipeline is a no-op.
+        """
+        self._closed = True
+
+    # ------------------------------------------------------------------
+    def health(self) -> PipelineHealth:
+        """Return a snapshot of this pipeline's own lifecycle state.
+
+        Not a per-frame diagnosis — see DepthPerceptionResult for that.
+        last_confidence/last_processing_time_ms are None until process() has
+        been called at least once (or again after reset()).
+        """
+        return PipelineHealth(
+            is_closed=self._closed,
+            frames_processed=self._frames_processed,
+            last_confidence=self._last_confidence,
+            last_processing_time_ms=self._last_processing_time_ms,
+        )
 
     # ------------------------------------------------------------------
     @property

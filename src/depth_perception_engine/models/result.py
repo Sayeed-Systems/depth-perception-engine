@@ -15,6 +15,29 @@ from depth_perception_engine.traversability.types import NavigationDecision, Reg
 
 
 @dataclass(frozen=True, slots=True)
+class StereoObservation:
+    """One stereo capture, as a single self-contained value instead of loose
+    positional arguments.
+
+    Optional convenience for callers that want to carry timestamps/frame
+    identity alongside the images through their own code — not required by
+    DepthPerceptionPipeline.process(), which still takes left_image/
+    right_image directly. Use process_observation() to hand one of these to
+    the pipeline instead.
+
+    left_timestamp/right_timestamp are opaque caller-defined floats (e.g.
+    seconds since epoch or a monotonic clock) — this library performs no
+    unit conversion or synchronization logic on them; that is a caller
+    concern (e.g. mp01_perception's stereo sync_slop check).
+    """
+    left_image: np.ndarray
+    right_image: np.ndarray
+    left_timestamp: Optional[float] = None
+    right_timestamp: Optional[float] = None
+    frame_id: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
 class BeamReading:
     """One vertical column-slice of the obstacle scan.
 
@@ -54,6 +77,12 @@ class DepthPerceptionResult:
 
     Returned by both DepthPerceptionPipeline.process() and
     pipeline.api.process_stereo_pair().
+
+    Known naming wart, deliberately not fixed here: `traversability_mask`
+    holds a TraversabilityResult, not a pixel mask — see
+    docs/IMPLEMENTATION_STATUS.md. Left as-is because mp01_perception reads
+    this field by name today; renaming it is a breaking change out of this
+    recovery task's scope.
     """
     disparity_map: np.ndarray
     depth_map: np.ndarray
@@ -61,3 +90,21 @@ class DepthPerceptionResult:
     obstacles: ObstacleAssessment
     confidence: float
     processing_time_ms: float
+    valid_disparity_mask: Optional[np.ndarray] = None
+    valid_depth_mask: Optional[np.ndarray] = None
+    timestamp: Optional[float] = None
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineHealth:
+    """A point-in-time snapshot returned by DepthPerceptionPipeline.health().
+
+    Deliberately minimal — this reports the pipeline's own lifecycle state
+    and the last frame's summary metrics, not a re-diagnosis of the scene
+    (that's what DepthPerceptionResult.confidence/traversability/obstacles
+    are for, per-frame).
+    """
+    is_closed: bool
+    frames_processed: int
+    last_confidence: Optional[float] = None
+    last_processing_time_ms: Optional[float] = None

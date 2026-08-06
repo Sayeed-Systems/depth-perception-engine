@@ -52,3 +52,64 @@ class PipelineConfig:
             if self.obstacle_dead_zone_px is not None
             else self.num_disparities
         )
+
+    def __post_init__(self) -> None:
+        """Validate at construction time, not three layers deeper inside
+        DisparityEngine/ThreatAssessor/SceneInterpreter — mirrors the
+        validation pattern StereoCalibration and RegionAnalyzer already use
+        elsewhere in this codebase."""
+        if self.num_disparities % 16 != 0:
+            raise ValueError(
+                f"num_disparities ({self.num_disparities}) must be divisible by 16."
+            )
+        if self.block_size % 2 == 0 or self.block_size < 1:
+            raise ValueError(
+                f"block_size ({self.block_size}) must be a positive odd integer."
+            )
+        if self.caution_distance_m <= 0.0:
+            raise ValueError(
+                f"caution_distance_m ({self.caution_distance_m}) must be positive."
+            )
+        if not (self.caution_distance_m < self.clear_distance_m):
+            raise ValueError(
+                "Require caution_distance_m < clear_distance_m, got "
+                f"caution_distance_m={self.caution_distance_m}, "
+                f"clear_distance_m={self.clear_distance_m}."
+            )
+        if self.n_beams < 1:
+            raise ValueError(f"n_beams ({self.n_beams}) must be at least 1.")
+        if not (0 <= self.obstacle_percentile <= 100):
+            raise ValueError(
+                f"obstacle_percentile ({self.obstacle_percentile}) must be in [0, 100]."
+            )
+        if self.obstacle_min_valid_px < 0:
+            raise ValueError(
+                f"obstacle_min_valid_px ({self.obstacle_min_valid_px}) must be >= 0."
+            )
+        if not (0.0 <= self.obstacle_blocked_invalid_ratio <= 1.0):
+            raise ValueError(
+                "obstacle_blocked_invalid_ratio "
+                f"({self.obstacle_blocked_invalid_ratio}) must be in [0, 1]."
+            )
+        if not (0.0 < self.obstacle_ema_alpha <= 1.0):
+            raise ValueError(
+                f"obstacle_ema_alpha ({self.obstacle_ema_alpha}) must be in (0, 1]."
+            )
+        if self.obstacle_debounce_frames < 1:
+            raise ValueError(
+                f"obstacle_debounce_frames ({self.obstacle_debounce_frames}) must be at least 1."
+            )
+        if self.obstacle_dead_zone_px is not None and self.obstacle_dead_zone_px < 0:
+            raise ValueError(
+                f"obstacle_dead_zone_px ({self.obstacle_dead_zone_px}) must be >= 0 when set."
+            )
+        if self.traversability_grid_rows < 1 or self.traversability_grid_cols < 1:
+            raise ValueError(
+                "traversability_grid_rows/cols must both be at least 1, got "
+                f"rows={self.traversability_grid_rows}, cols={self.traversability_grid_cols}."
+            )
+        if not (0.0 <= self.traversability_ambiguous_fraction_thresh <= 1.0):
+            raise ValueError(
+                "traversability_ambiguous_fraction_thresh "
+                f"({self.traversability_ambiguous_fraction_thresh}) must be in [0, 1]."
+            )

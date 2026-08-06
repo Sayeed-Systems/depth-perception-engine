@@ -68,6 +68,82 @@ def _mixed_disparity_map(height=48, width=64) -> np.ndarray:
     return disp
 
 
+class TestAnalyticKnownDepth:
+    """
+    Independent ground truth, not derived from any OpenCV function.
+
+    TestZOnlyMatchesFullReprojection below proves the new closed-form Z
+    matches cv2.reprojectImageTo3D — but that's a differential test: it
+    would pass even if both sides shared the same underlying bug. This
+    class instead hand-builds a Q matrix for the case with no
+    principal-point x-offset between the left/right rectified views
+    (Q[2,2] = 0, Q[3,3] = 0 — the standard OpenCV stereoRectify form when
+    both cameras share the same cx), for which the general Z formula
+    collapses exactly to the textbook relation:
+
+        depth_m = (focal_length_px * baseline_m) / disparity_px
+
+    and asserts DepthEstimator.estimate() reproduces that hand-computed
+    number for a known focal length, baseline, and constant-disparity
+    plane — with no OpenCV reprojection function involved on either side
+    of the comparison.
+    """
+
+    @staticmethod
+    def _make_q(focal_length_px: float, baseline_m: float, cx: float = 160.0, cy: float = 120.0) -> np.ndarray:
+        # Q[3,2] chosen so DepthEstimator's own baseline_m property (which
+        # takes abs(1/Q[3,2])/1000) reports exactly baseline_m, AND the
+        # sign works out to a positive depth for positive disparity — see
+        # this class's docstring for the algebra.
+        tx = 1.0 / (baseline_m * 1000.0)
+        return np.array(
+            [
+                [1.0, 0.0, 0.0, -cx],
+                [0.0, 1.0, 0.0, -cy],
+                [0.0, 0.0, 0.0, focal_length_px],
+                [0.0, 0.0, tx, 0.0],
+            ],
+            dtype=np.float64,
+        )
+
+    def test_constant_disparity_plane_matches_hand_computed_depth(self):
+        focal_length_px = 600.0
+        baseline_m = 0.065
+        disparity_px = 50.0
+        expected_depth_m = (focal_length_px * baseline_m) / disparity_px  # = 0.78 m
+
+        Q = self._make_q(focal_length_px, baseline_m)
+        estimator = DepthEstimator(Q)
+        assert estimator.focal_length_px == pytest.approx(focal_length_px)
+        assert estimator.baseline_m == pytest.approx(baseline_m)
+
+        disparity = np.full((30, 40), disparity_px, dtype=np.float32)
+        depth = estimator.estimate(disparity)
+
+        assert np.all(depth > 0.0), "expected every pixel to be valid for this in-range disparity"
+        np.testing.assert_allclose(depth, expected_depth_m, rtol=1e-5)
+
+    @pytest.mark.parametrize(
+        "focal_length_px, baseline_m, disparity_px",
+        [
+            (600.0, 0.065, 50.0),   # 0.78 m
+            (614.5, 0.0647, 100.0),  # ~0.397 m, close to this project's real calibration values
+            (500.0, 0.05, 25.0),    # 1.0 m exactly
+            (800.0, 0.10, 40.0),    # 2.0 m exactly
+        ],
+    )
+    def test_several_known_focal_baseline_disparity_combinations(
+        self, focal_length_px, baseline_m, disparity_px,
+    ):
+        expected_depth_m = (focal_length_px * baseline_m) / disparity_px
+
+        Q = self._make_q(focal_length_px, baseline_m)
+        disparity = np.full((10, 10), disparity_px, dtype=np.float32)
+        depth = DepthEstimator(Q).estimate(disparity)
+
+        np.testing.assert_allclose(depth, expected_depth_m, rtol=1e-5)
+
+
 class TestZOnlyMatchesFullReprojection:
     def test_matches_reference_on_real_project_calibration(self, calibration):
         disp = _mixed_disparity_map()

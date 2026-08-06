@@ -4,6 +4,8 @@ from depth_perception_engine.models.result import (
     BeamReading,
     DepthPerceptionResult,
     ObstacleAssessment,
+    PipelineHealth,
+    StereoObservation,
     TraversabilityResult,
 )
 
@@ -12,4 +14,6 @@ __all__ = [
     "ObstacleAssessment",
     "TraversabilityResult",
     "DepthPerceptionResult",
+    "StereoObservation",
+    "PipelineHealth",
 ]
