@@ -2,6 +2,8 @@
 
 Written as part of a baseline-recovery/audit pass (see `docs/VALIDATION_REPORT.md` for the full report). States what's actually true today — not aspirational.
 
+> **Addendum (2026-08-05, Level 3 Phase E1):** a contract-freezing pass added `frames.py`, `calibration/contracts.py`, and `geometry/` (interfaces only — see `docs/LEVEL3_CONTRACTS.md`/`docs/LEVEL3_ARCHITECTURE.md`). This section below predates that pass and is left as-is (still accurate for what it covers). Separately, a perception capability audit (also 2026-08-05, after this doc was first written) found `DepthEstimator.estimate_point_cloud()` has zero callers and zero tests — E1 froze the contracts a real point-cloud producer will eventually need; it did not wire one in or add a producer. See `docs/E2_IMPLEMENTATION_PLAN.md` for what that actually requires.
+
 ## Implemented and verified
 
 - Standalone, ROS-free, pip-installable stereo depth library (`pip install -e .` — real venv, real hardware, no MP01 workspace needed).

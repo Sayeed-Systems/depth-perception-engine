@@ -204,6 +204,30 @@ class TestProcessObservation:
         assert isinstance(result, DepthPerceptionResult)
         assert result.timestamp == 5.0
 
+    def test_observation_calibration_field_defaults_to_none_and_is_unused(
+        self, config, calibration, stereo_pair,
+    ):
+        """StereoObservation.calibration is reserved for future multi-rig
+        use (Level 3, Phase E1) — process_observation() must keep using the
+        pipeline's own calibration regardless of what's set here, proving
+        this field is inert today, not silently wired in."""
+        left, right = stereo_pair
+        obs_without_calibration = StereoObservation(left_image=left, right_image=right)
+        assert obs_without_calibration.calibration is None
+
+        obs_with_calibration = StereoObservation(
+            left_image=left, right_image=right, calibration=calibration,
+        )
+        pipeline = DepthPerceptionPipeline(config, calibration)
+
+        result_without = pipeline.process_observation(obs_without_calibration)
+        result_with = pipeline.process_observation(obs_with_calibration)
+
+        # Both produce a normal result — the field's presence/absence must
+        # not change process_observation()'s behavior in any way.
+        np.testing.assert_array_equal(result_without.disparity_map, result_with.disparity_map)
+        np.testing.assert_array_equal(result_without.depth_map, result_with.depth_map)
+
 
 class TestLifecycle:
     def test_health_before_any_process_call(self, config, calibration):

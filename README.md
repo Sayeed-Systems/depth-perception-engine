@@ -233,16 +233,20 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-131 tests (grew from the 19 the src/ refactor above originally added, most
-recently in a 2026-08-05 baseline-recovery pass — see
-`docs/VALIDATION_REPORT.md`): every module imports cleanly,
+162 tests (grew from the 19 the src/ refactor above originally added,
+through a 2026-08-05 baseline-recovery pass and a Level 3 Phase E1
+contract-freezing pass — see `docs/VALIDATION_REPORT.md` and
+`docs/LEVEL3_ARCHITECTURE.md`): every module imports cleanly,
 `DepthPerceptionPipeline` can be built and `.process()`d (including
 repeated calls, its full lifecycle — `reset()`/`close()`/`health()` — and
 rejecting mismatched stereo pairs), every output field is the documented
 structured type (never a bare dict), depth math is verified both
 differentially against OpenCV and against independent hand-computed known
-values, and — the requirement this whole refactor exists for — no ROS
-dependency exists anywhere in the library. See `docs/ARCHITECTURE.md`,
+values, the new Level 3 calibration/geometry contracts construct and
+validate correctly (though nothing produces a real point cloud yet — see
+`docs/IMPLEMENTATION_STATUS.md`), and — the requirement this whole
+refactor exists for — no ROS dependency exists anywhere in the library.
+See `docs/ARCHITECTURE.md`,
 `docs/DATA_CONTRACTS.md`, and `docs/CALIBRATION.md` for the full module
 boundaries, output contracts, and calibration conventions;
 `docs/IMPLEMENTATION_STATUS.md` for what's implemented versus deferred.

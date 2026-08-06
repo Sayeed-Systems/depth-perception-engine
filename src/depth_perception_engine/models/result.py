@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from depth_perception_engine.calibration.models import StereoCalibration
 from depth_perception_engine.traversability.types import NavigationDecision, RegionStats
 
 
@@ -29,11 +30,21 @@ class StereoObservation:
     seconds since epoch or a monotonic clock) — this library performs no
     unit conversion or synchronization logic on them; that is a caller
     concern (e.g. mp01_perception's stereo sync_slop check).
+
+    calibration is reserved for future multi-rig/multi-camera use — NOT
+    currently consumed by DepthPerceptionPipeline.process_observation(),
+    which still always uses the calibration the pipeline itself was
+    constructed with. None (the default) means "use the pipeline's own
+    calibration", not "no calibration exists". A future caller carrying
+    per-observation calibration (e.g. a multi-camera fusion producer
+    selecting between rigs) has somewhere to put it without a public API
+    change — see docs/LEVEL3_PUBLIC_API.md.
     """
     left_image: np.ndarray
     right_image: np.ndarray
     left_timestamp: Optional[float] = None
     right_timestamp: Optional[float] = None
+    calibration: Optional[StereoCalibration] = None
     frame_id: Optional[str] = None
 
 
