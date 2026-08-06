@@ -171,6 +171,7 @@ runs/                          per-run telemetry from past examples/live_demo.py
 | `depth/` | `DepthEstimator` (disparity → metric depth via the calibration's Q matrix), `DistanceReader` (single-point ROI distance reading) |
 | `traversability/` | `RegionAnalyzer` + `SceneInterpreter` — grid-based region classification and a global `NavigationDecision` |
 | `obstacles/` | `ThreatAssessor` — per-beam nearest-obstacle scan, EMA-smoothed and debounced |
+| `quality/` | `looks_like_garbage_frame` — adjacent-pixel correlation check that flags corrupt/uncorrelated-noise frames before any stereo processing runs |
 | `fusion/` | Combines the above into one `DepthPerceptionResult`, including the aggregate `confidence` score |
 | `config/` | `PipelineConfig` — every tunable threshold as one plain dataclass |
 | `models/` | `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading` — typed outputs, never bare dicts |

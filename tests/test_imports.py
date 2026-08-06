@@ -21,6 +21,8 @@ _MODULES = [
     "depth_perception_engine.traversability.scene_interpreter",
     "depth_perception_engine.obstacles",
     "depth_perception_engine.obstacles.threat_assessment",
+    "depth_perception_engine.quality",
+    "depth_perception_engine.quality.frame_quality",
     "depth_perception_engine.fusion",
     "depth_perception_engine.fusion.result_builder",
     "depth_perception_engine.config",
