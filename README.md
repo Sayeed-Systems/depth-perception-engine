@@ -135,15 +135,28 @@ pytest --cov=depth_perception_engine
 
 ## Quick start
 
+Every symbol below imports directly from the package root — this is the
+canonical import style. Subpackage imports
+(`from depth_perception_engine.pipeline import DepthPerceptionPipeline`)
+still work as compatibility paths, but new code should use the top-level
+form. Full API tier reference: [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md).
+
 ```python
-from depth_perception_engine.calibration import load_stereo_calibration
-from depth_perception_engine.config import PipelineConfig
-from depth_perception_engine.pipeline import DepthPerceptionPipeline
+from depth_perception_engine import (
+    DepthPerceptionPipeline,
+    PipelineConfig,
+    StereoObservation,
+    load_stereo_calibration,
+)
 
 calibration = load_stereo_calibration("examples/config/stereo_calibration.xml")
 pipeline = DepthPerceptionPipeline(PipelineConfig(), calibration)   # build once
 
 result = pipeline.process(left_image, right_image)   # call per frame — both plain NumPy arrays
+# or, if you're carrying a StereoObservation (e.g. with timestamps) instead
+# of two loose arrays — an equivalent, not a different call shape:
+observation = StereoObservation(left_image=left_image, right_image=right_image)
+result = pipeline.process_observation(observation)
 
 result.disparity_map          # float32 (H, W)
 result.depth_map              # float32 (H, W), metres
@@ -160,9 +173,8 @@ pipeline.reset()                # clears cross-frame smoothing state, keeps cali
 pipeline.close()                # marks the pipeline unusable; further process() calls raise
 ```
 
-`from_config()` and `process_observation()` are also available for callers
-that prefer that shape — see `docs/DATA_CONTRACTS.md`'s `StereoObservation`
-section. Both are equivalent to the constructor/`process()` calls above.
+`from_config()` is also available as an alternate constructor, equivalent
+to `DepthPerceptionPipeline(...)` above.
 
 See [`examples/synthetic_demo.py`](examples/synthetic_demo.py) for this
 same call shape run standalone (no camera), and
@@ -284,7 +296,9 @@ refactor exists for — no ROS dependency exists anywhere in the library.
 See `docs/ARCHITECTURE.md`,
 `docs/DATA_CONTRACTS.md`, and `docs/CALIBRATION.md` for the full module
 boundaries, output contracts, and calibration conventions;
-`docs/IMPLEMENTATION_STATUS.md` for what's implemented versus deferred.
+`docs/IMPLEMENTATION_STATUS.md` for what's implemented versus deferred;
+`docs/PUBLIC_API.md` for the authoritative Tier 1/2/3 API reference and
+stability policy.
 
 ## Status
 

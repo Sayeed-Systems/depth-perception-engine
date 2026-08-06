@@ -1,5 +1,7 @@
 # Public API specification (Level 3, Phase E1)
 
+> **Superseded as the general reference by `docs/PUBLIC_API.md`** (public API freeze pass, 2026-08-05), which documents the full Tier 1/2/3 contract, stability policy, and the `mp01_perception` wrapper-readiness proof for the whole library — not just the Level 3 question this doc originally answered. This doc's own finding (below) is unchanged and still correct; kept as the historical record of *why* no redesign was needed for Level 3 specifically. One update from that pass: `NavigationDecision`/`RegionClass`/`RegionStats`/`TextureClass` (referenced throughout this doc as living in `traversability.types`) are now Tier 1, top-level exports — see `docs/PUBLIC_API.md` for why.
+
 ## Finding: no redesign needed
 
 The E1 request asked whether the public API needs redesigning to reach `engine.process(observation) -> DepthPerceptionResult`. It already does — added in the previous session's baseline recovery pass, before this E1 pass began:

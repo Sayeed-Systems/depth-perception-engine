@@ -8,6 +8,16 @@
 > is kept as-is below for its historical design rationale (still accurate —
 > the actual integration followed this plan) rather than rewritten; see
 > `docs/IMPLEMENTATION_STATUS.md` in this repo for what's current.
+>
+> **STATUS UPDATE (2026-08-05, public API freeze pass):** §2's code example
+> below has been corrected from subpackage-style imports to the canonical
+> top-level form — `load_stereo_calibration`/`PipelineConfig`/
+> `DepthPerceptionPipeline` were always top-level exports; showing them
+> imported from `.calibration`/`.config`/`.pipeline` was itself an instance
+> of the exact import ambiguity `docs/PUBLIC_API.md` now resolves. Verified
+> against `mp01_perception`'s actual, current `perception_processor.py`
+> this pass: it already uses the top-level form independently — this
+> doc's example now matches real usage, not just the original plan.
 
 Status (as originally written): this library is ready to be imported. **No
 integration has been performed yet** — `mp01_ws` is untouched. This document
@@ -56,9 +66,11 @@ dependency.
 and `Diagnostics` once:
 
 ```python
-from depth_perception_engine.calibration import load_stereo_calibration
-from depth_perception_engine.config import PipelineConfig
-from depth_perception_engine.pipeline import DepthPerceptionPipeline
+from depth_perception_engine import (
+    DepthPerceptionPipeline,
+    PipelineConfig,
+    load_stereo_calibration,
+)
 
 
 class PerceptionProcessor:

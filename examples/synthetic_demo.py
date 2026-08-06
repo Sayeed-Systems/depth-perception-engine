@@ -15,9 +15,11 @@ import os
 
 import numpy as np
 
-from depth_perception_engine.calibration import load_stereo_calibration
-from depth_perception_engine.config import PipelineConfig
-from depth_perception_engine.pipeline import DepthPerceptionPipeline
+from depth_perception_engine import (
+    DepthPerceptionPipeline,
+    PipelineConfig,
+    load_stereo_calibration,
+)
 
 _EXAMPLES_DIR = os.path.dirname(os.path.abspath(__file__))
 _CALIBRATION_FILE = os.path.join(_EXAMPLES_DIR, "config", "stereo_calibration.xml")
