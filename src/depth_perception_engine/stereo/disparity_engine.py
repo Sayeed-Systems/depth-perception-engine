@@ -11,7 +11,7 @@ or neural network inference.
 """
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -156,13 +156,29 @@ class DisparityEngine:
         return disp_float.astype(np.uint8)
 
     def compute_disparity(
-        self, left_frame: np.ndarray, right_frame: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self,
+        left_frame: np.ndarray,
+        right_frame: np.ndarray,
+        left_gray: Optional[np.ndarray] = None,
+        compute_visualization: bool = True,
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """Compute a disparity map from a rectified stereo image pair.
 
         Args:
             left_frame: Left stereo image (BGR or grayscale ndarray).
             right_frame: Right stereo image (BGR or grayscale ndarray).
+            left_gray: Precomputed grayscale conversion of *left_frame*,
+                if the caller already needed one for another purpose
+                (e.g. traversability texture analysis) — reused here
+                instead of converting a second time. Must be the same
+                conversion _to_grayscale would produce. Default None
+                converts internally, as before.
+            compute_visualization: Whether to compute and return the
+                normalized uint8 visualization form. Default True
+                preserves this method's existing return contract.
+                Production/repeated-frame callers that never read
+                *visualization_disparity* should pass False to skip
+                that extra full-frame normalization work entirely.
 
         Returns:
             ``(raw_disparity, visualization_disparity)`` where
@@ -170,7 +186,8 @@ class DisparityEngine:
             * *raw_disparity* is a float32 ndarray of true disparity values
               (pixels) suitable for downstream depth computation.
             * *visualization_disparity* is a uint8 ndarray normalized to
-              [0, 255] — brighter pixels indicate closer objects.
+              [0, 255] — brighter pixels indicate closer objects — or
+              None if compute_visualization=False.
 
         Raises:
             ValueError: If input validation fails.
@@ -181,7 +198,7 @@ class DisparityEngine:
 
         self.validate_inputs(left_frame, right_frame)
 
-        left_gray = self._to_grayscale(left_frame, "left")
+        left_gray = left_gray if left_gray is not None else self._to_grayscale(left_frame, "left")
         right_gray = self._to_grayscale(right_frame, "right")
 
         logger.debug(
@@ -200,7 +217,9 @@ class DisparityEngine:
         # Convert fixed-point int16 → true float32 disparity in pixels
         raw_disparity = (raw / 16.0).astype(np.float32)
 
-        visualization_disparity = self.normalize_disparity(raw)
+        visualization_disparity = (
+            self.normalize_disparity(raw) if compute_visualization else None
+        )
 
         logger.debug(
             "Disparity computed — shape: %s, min: %.2f, max: %.2f",

@@ -63,8 +63,37 @@ class DepthEstimator:
     def estimate(self, disparity: np.ndarray) -> np.ndarray:
         """Convert a disparity map to a metric depth map using the Q matrix.
 
-        Uses cv2.reprojectImageTo3D and extracts the Z channel. Pixels with
-        depth outside [MIN_DEPTH_M, MAX_DEPTH_M] are set to 0.0 (invalid).
+        Computes only the Z (depth) channel cv2.reprojectImageTo3D would
+        produce, not the full X/Y/Z reprojection — nothing downstream of
+        this method ever consumes X or Y (see estimate_point_cloud() for
+        the rare caller that actually wants the full point cloud). For
+        any Q produced by cv2.stereoRectify, Z depends only on Q's row 2
+        and the homogeneous divisor W only on row 3 — rows 0/1 (which
+        produce X/Y) never factor into disparity at all, by construction
+        of the standard Q matrix — so for every pixel with a *valid*
+        disparity, Z = (Q[2,2]*d + Q[2,3]) / (Q[3,2]*d + Q[3,3]) is
+        mathematically identical to
+        cv2.reprojectImageTo3D(...)[:, :, 2] — verified in
+        tests/test_depth_estimator.py's TestZOnlyMatchesFullReprojection
+        across both this project's real calibration and synthetic Q
+        matrices with a non-zero principal-point-offset term.
+
+        Deliberately does NOT use reprojectImageTo3D's own
+        handleMissingValues sentinel (which special-cases whichever
+        disparity value happens to be the *frame's minimum* — an
+        OpenCV-internal heuristic that doesn't match this codebase's
+        own invalid-disparity convention, used everywhere else in this
+        package: disparity <= 0, see e.g. DisparityEngine's
+        normalize_disparity). Instead, disparity <= 0 is masked
+        explicitly below, before the division — a small but real
+        correctness improvement, not just a perf-neutral swap: the old
+        sentinel-based approach could (for some Q matrices) fail to
+        flag a genuinely invalid pixel as invalid, or could incorrectly
+        flag a legitimate small-but-positive disparity as invalid
+        purely because it happened to be the frame's minimum.
+
+        Pixels with a non-positive disparity, or a resulting depth
+        outside [MIN_DEPTH_M, MAX_DEPTH_M], are set to 0.0 (invalid).
 
         Args:
             disparity: float32 ndarray of disparity values (pixels), as
@@ -77,7 +106,6 @@ class DepthEstimator:
         Raises:
             TypeError: If disparity is not a numpy ndarray.
             ValueError: If disparity has fewer than 2 dimensions.
-            RuntimeError: If reprojection fails unexpectedly.
         """
         if not isinstance(disparity, np.ndarray):
             raise TypeError(
@@ -88,15 +116,21 @@ class DepthEstimator:
                 f"disparity must have at least 2 dimensions, got {disparity.ndim}."
             )
 
-        try:
-            points_3d = cv2.reprojectImageTo3D(
-                disparity.astype(np.float32), self._Q, handleMissingValues=True
-            )
-        except cv2.error as exc:
-            raise RuntimeError(f"reprojectImageTo3D failed: {exc}") from exc
+        disp_f = disparity.astype(np.float32)
+        invalid_disp = disp_f <= 0.0
+
+        q22, q23 = float(self._Q[2, 2]), float(self._Q[2, 3])
+        q32, q33 = float(self._Q[3, 2]), float(self._Q[3, 3])
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z_mm = q22 * disp_f + q23
+            w = q32 * disp_f + q33
+            depth_mm = z_mm / w
+
+        depth_mm[invalid_disp] = np.nan
 
         # Calibration object-points were in mm → Z comes out in mm; convert to m.
-        depth = (points_3d[:, :, 2] / 1000.0).astype(np.float32)
+        depth = (depth_mm / 1000.0).astype(np.float32)
 
         # Zero out invalid / out-of-range values
         valid = (

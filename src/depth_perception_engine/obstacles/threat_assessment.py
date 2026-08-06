@@ -14,7 +14,12 @@ that produce no stereo correspondence regardless of distance.
 
 Each beam's distance is EMA-smoothed and its status is debounced (must
 persist for several consecutive frames before changing) so per-frame SGBM
-noise doesn't make readings jump or the obstacle overlay flicker.
+noise doesn't make readings jump or the obstacle overlay flicker. That
+debounce is bypassed the moment a beam has no real depth evidence at all
+(distance_m's EMA already resets to 0.0 immediately in that case) — a
+stale CLEAR/CAUTION/BLOCKED status must never keep being reported once
+the evidence behind it is gone, even for the few frames debounce would
+otherwise hold it for. See the `evidence_lost` handling in assess().
 
 Holds per-beam temporal state across assess() calls (see the constructor) —
 constructing a fresh ThreatAssessor per frame throws that smoothing away.
@@ -86,6 +91,10 @@ class ThreatAssessor:
             x1 = int(i * beam_w)
             x2 = int((i + 1) * beam_w)
 
+            # Flatten each non-contiguous vertical slab before the repeated
+            # validity/IQR/percentile scans. Although this makes a copy, the
+            # contiguous access pattern is measurably faster than applying
+            # those operations directly to the strided 2-D view.
             col   = depth_map[:, x1:x2].flatten().astype(np.float32)
             valid = col[(col > 0) & np.isfinite(col)]
 
@@ -101,7 +110,13 @@ class ThreatAssessor:
             else:
                 d_m = 0.0
 
-            if d_m <= 0.0:
+            # Loss-of-evidence for this frame, before any reclassification
+            # below — used to bypass status debounce entirely (see that
+            # block for why this must be decided here, not from the final
+            # post-reclassification `status`).
+            evidence_lost = d_m <= 0.0
+
+            if evidence_lost:
                 status = self.NO_DATA
             elif d_m < self._caution_m:
                 status = self.BLOCKED
@@ -121,7 +136,7 @@ class ThreatAssessor:
 
             # EMA-smooth the distance — snap on first reading, reset on loss
             # of signal so a stale distance doesn't linger once invalid.
-            if d_m > 0.0:
+            if not evidence_lost:
                 prev = self._ema_dist[i]
                 self._ema_dist[i] = d_m if prev <= 0.0 else (
                     self._ema_alpha * d_m + (1.0 - self._ema_alpha) * prev
@@ -131,8 +146,29 @@ class ThreatAssessor:
 
             # Debounce status — require the new status to persist for
             # several consecutive frames before it actually changes, so a
-            # single noisy frame can't flip the overlay on/off.
-            if status == self._stable_status[i]:
+            # single noisy frame can't flip the overlay on/off. EXCEPTION:
+            # a frame with no real depth evidence (evidence_lost, decided
+            # above — independent of whatever `status` got reclassified
+            # to) applies immediately, bypassing debounce entirely.
+            #
+            # Why: ordinary debounce noise-rejection is for smoothing
+            # genuine, evidenced readings that flicker between
+            # CLEAR/CAUTION/BLOCKED — valuable there. But applying that
+            # same delay when evidence has vanished entirely means a
+            # stale, no-longer-trustworthy status (e.g. CLEAR from
+            # several frames ago) keeps being reported for up to
+            # debounce_frames-1 more frames after a real fault (camera
+            # dropout, corruption). That is a stale-value leak: this
+            # beam's `distance_m` has already reset to 0.0 immediately
+            # above, but without this exception `status` would lag
+            # behind it, so a consumer reading status alone could act on
+            # "CLEAR" for frames where distance_m is simultaneously 0.0.
+            # Confirmed missing live during remediation (Issue B).
+            if evidence_lost:
+                self._stable_status[i]  = status
+                self._pending_status[i] = None
+                self._pending_count[i]  = 0
+            elif status == self._stable_status[i]:
                 self._pending_status[i] = None
                 self._pending_count[i]  = 0
             else:

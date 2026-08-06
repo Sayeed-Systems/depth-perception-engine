@@ -57,6 +57,23 @@ def test_process_stereo_pair_one_shot(config, calibration, stereo_pair):
     assert isinstance(result, DepthPerceptionResult)
 
 
+def test_process_stereo_pair_raises_on_rectification_failure(config, calibration):
+    """Regression coverage for Issue C (remediation) in the stateless api.py
+    entry point — mirrors test_pipeline.py's equivalent for
+    DepthPerceptionPipeline. A frame-size mismatch against calibration must
+    raise, not silently process the unrectified pair."""
+    wrong_w, wrong_h = calibration.image_size[0] // 2, calibration.image_size[1] // 2
+    rng = np.random.default_rng(7)
+    left = rng.integers(0, 255, (wrong_h, wrong_w, 3), dtype=np.uint8)
+    right = rng.integers(0, 255, (wrong_h, wrong_w, 3), dtype=np.uint8)
+
+    try:
+        process_stereo_pair(left, right, config, calibration, rectify=True)
+        assert False, "expected rectification failure to raise"
+    except ValueError as exc:
+        assert "does not match calibrated size" in str(exc)
+
+
 def test_detect_obstacles_is_stateless_across_calls(config, calibration, stereo_pair):
     """Unlike DepthPerceptionPipeline, this functional form builds a fresh
     ThreatAssessor every call — so repeated calls on identical input must

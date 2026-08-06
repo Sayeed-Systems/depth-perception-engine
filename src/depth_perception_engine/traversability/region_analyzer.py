@@ -135,6 +135,7 @@ class RegionAnalyzer:
         confidence = self._confidence(valid_pct / 100.0, texture_score, entropy)
 
         classification = self._classify(
+            valid_count=valid_count,
             invalid_ratio=invalid_ratio,
             texture_class=texture_class,
             confidence=confidence,
@@ -144,6 +145,7 @@ class RegionAnalyzer:
         return RegionStats(
             name=name, row=row, col=col, x1=x1, y1=y1, x2=x2, y2=y2,
             valid_pct=valid_pct, invalid_pct=invalid_pct, invalid_ratio=invalid_ratio,
+            valid_count=valid_count, total_pixels=total_pixels,
             depth_avg_m=depth_avg_m, depth_median_m=depth_median_m,
             depth_min_m=depth_min_m, depth_max_m=depth_max_m,
             texture_score=texture_score, entropy=entropy,
@@ -221,6 +223,7 @@ class RegionAnalyzer:
     # ------------------------------------------------------------------
     def _classify(
         self,
+        valid_count: int,
         invalid_ratio: float,
         texture_class: TextureClass,
         confidence: float,
@@ -229,12 +232,35 @@ class RegionAnalyzer:
         """Combine invalid_ratio + texture + confidence + depth — never a single threshold.
 
         Priority order (first match wins):
+            0. UNKNOWN             — HARD GATE, checked before anything else: fewer than
+                                      min_valid_pixels valid disparity pixels in this region.
             1. PROBABLE_WALL       — very high invalid_ratio AND low texture AND low confidence
             2. LOW_TEXTURE_UNKNOWN — high invalid_ratio but doesn't meet the stricter wall criteria
             3. LOW_CONFIDENCE      — confidence too low to trust, regardless of the reason
             4. OBSTACLE            — confident reading with something close
             5. CLEAR               — confident reading, nothing close
+
+        Why the UNKNOWN gate must come first, unconditionally
+        ------------------------------------------------------
+        `confidence` is a blend of disparity validity (50%), texture (30%),
+        and entropy (20%) — see `_confidence()`. Texture and entropy are
+        computed from the raw grayscale crop and are fully independent of
+        whether SGBM found any stereo correspondence at all. Before this
+        gate existed, a region with valid_count == 0 (zero usable disparity
+        — no evidence whatsoever) could still score confidence above
+        `confidence_low_thresh` from texture+entropy alone, skip every
+        specific branch below (texture_class often isn't LOW_TEXTURE for a
+        real-looking-but-uncorrelated crop), and fall through to the
+        default CLEAR return — reporting a region with no actual depth
+        information as safe to fly through. Confirmed live, independently,
+        on both all-black and all-white degenerate frames. This gate
+        removes that path entirely: no combination of texture/entropy can
+        ever produce anything but UNKNOWN once valid_count is insufficient,
+        because none of the branches below are even reached.
         """
+        if valid_count < self._min_valid_pixels:
+            return RegionClass.UNKNOWN
+
         if (
             invalid_ratio >= self._invalid_ratio_wall_thresh
             and texture_class == TextureClass.LOW_TEXTURE

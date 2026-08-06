@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 SceneState = Dict[str, RegionStats]
 
-_AMBIGUOUS_CLASSES = (RegionClass.LOW_CONFIDENCE, RegionClass.LOW_TEXTURE_UNKNOWN)
+_AMBIGUOUS_CLASSES = (
+    RegionClass.LOW_CONFIDENCE, RegionClass.LOW_TEXTURE_UNKNOWN, RegionClass.UNKNOWN,
+)
 _BLOCKED_CLASSES   = (RegionClass.OBSTACLE, RegionClass.PROBABLE_WALL)
 
 
@@ -52,8 +54,8 @@ class SceneInterpreter:
             caution_m:                 forward-cell distance below which to slow down
             clear_m:                   forward-cell distance above which full speed is safe
             ambiguous_fraction_thresh: if at least this fraction of all regions are
-                                       LOW_CONFIDENCE/LOW_TEXTURE_UNKNOWN, the scene as a
-                                       whole is too uncertain to trust any single
+                                       LOW_CONFIDENCE/LOW_TEXTURE_UNKNOWN/UNKNOWN, the scene
+                                       as a whole is too uncertain to trust any single
                                        direction -> ROTATE_AND_SCAN
 
         Raises:
@@ -147,6 +149,13 @@ class SceneInterpreter:
             4. forward clear but within caution range — SLOW_DOWN
             5. forward clear and beyond clear_m — MOVE_FORWARD
             6. fallback — HOVER
+
+        UNKNOWN regions (insufficient valid disparity — see RegionAnalyzer's
+        hard gate) are members of _AMBIGUOUS_CLASSES: they contribute to the
+        ROTATE_AND_SCAN fraction, and an UNKNOWN forward region always
+        yields SLOW_DOWN via branch 3, never MOVE_FORWARD. MOVE_FORWARD is
+        reachable only through branch 5, which requires forward.classification
+        == CLEAR specifically — UNKNOWN can never reach it.
         """
         if not scene:
             return NavigationDecision.HOVER

@@ -108,23 +108,48 @@ class DepthPerceptionPipeline:
 
         Returns:
             A DepthPerceptionResult.
+
+        Raises:
+            ValueError, RuntimeError: Propagated unchanged from
+                RectificationEngine.rectify() (when rectify=True) on a
+                rectification failure — see the comment at that call site
+                for why this is not caught and silently degraded here.
         """
         require_matching_stereo_pair(left_image, right_image)
         t0 = time.perf_counter()
 
         left, right = left_image, right_image
         if self._rectifier is not None:
-            try:
-                left, right = self._rectifier.rectify(left, right)
-            except (ValueError, RuntimeError):
-                # Falls back to the unrectified pair rather than dropping
-                # the frame — matches the original main.py's behavior.
-                left, right = left_image, right_image
+            # Deliberately NOT caught here. Rectification failure (e.g. a
+            # frame size that no longer matches the loaded calibration —
+            # ValueError from RectificationEngine._validate_frame; or
+            # uninitialised maps — RuntimeError) used to be swallowed and
+            # fall back to running SGBM/depth/traversability on the
+            # UNRECTIFIED pair instead, producing plausible-looking but
+            # systematically wrong depth with no signal anything was
+            # wrong. A caller has no way to trust depth computed from
+            # unrectified images against calibration-derived rectification
+            # maps, so this must invalidate the whole frame, not
+            # degrade silently. Letting this propagate means the caller
+            # (e.g. mp01_perception's PerceptionNode, whose broad
+            # `except Exception` around processor.process() already drops
+            # the frame, records the exact error in its diagnostics'
+            # last_error field, and logs a warning) treats it exactly
+            # like any other genuine processing failure — one bad frame
+            # is dropped, not silently trusted.
+            left, right = self._rectifier.rectify(left, right)
 
-        raw_disparity, _ = self._disparity_engine.compute_disparity(left, right)
+        # Computed once and reused for both SGBM matching (below) and
+        # traversability texture analysis — DisparityEngine used to
+        # convert left to grayscale internally, duplicating this exact
+        # conversion on the same input every frame.
+        gray = left if left.ndim == 2 else cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
+
+        raw_disparity, _ = self._disparity_engine.compute_disparity(
+            left, right, left_gray=gray, compute_visualization=False,
+        )
         depth_map = self._depth_estimator.estimate(raw_disparity)
 
-        gray = left if left.ndim == 2 else cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
         regions = self._scene_interpreter.analyze(gray, raw_disparity, depth_map)
         decision = self._scene_interpreter.decide_navigation(regions)
         traversability = TraversabilityResult(regions=regions, decision=decision)

@@ -42,7 +42,9 @@ def compute_disparity(
     left_image: np.ndarray,
     right_image: np.ndarray,
     config: PipelineConfig,
-) -> Tuple[np.ndarray, np.ndarray]:
+    left_gray: Optional[np.ndarray] = None,
+    compute_visualization: bool = True,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """Compute a disparity map from a rectified stereo pair.
 
     Returns:
@@ -54,7 +56,10 @@ def compute_disparity(
         num_disparities=config.num_disparities,
         block_size=config.block_size,
     )
-    return engine.compute_disparity(left_image, right_image)
+    return engine.compute_disparity(
+        left_image, right_image,
+        left_gray=left_gray, compute_visualization=compute_visualization,
+    )
 
 
 def estimate_depth(disparity: np.ndarray, calibration: StereoCalibration) -> np.ndarray:
@@ -141,9 +146,19 @@ def process_stereo_pair(
             has no meaning without it).
         rectify: If True (default), rectify left/right using *calibration*
             before computing disparity. Set False if the images are already
-            rectified upstream. On a rectification failure, falls back to
-            the unrectified images, matching the original pipeline's
-            behavior.
+            rectified upstream.
+
+    Raises:
+        ValueError, RuntimeError: Propagated unchanged from
+            RectificationEngine.rectify() on a rectification failure (e.g.
+            a frame size mismatched against *calibration*, or uninitialised
+            maps) — deliberately not caught here. See
+            DepthPerceptionPipeline.process()'s matching comment: running
+            SGBM/depth/traversability on an unrectified pair while
+            silently pretending it succeeded is not an acceptable
+            fallback for anything depth-based, so the caller must see
+            this frame as failed, not get a plausible-looking wrong
+            result.
     """
     require_matching_stereo_pair(left_image, right_image)
     t0 = time.perf_counter()
@@ -152,15 +167,19 @@ def process_stereo_pair(
     if rectify:
         rectifier = RectificationEngine(calibration)
         rectifier.initialize_rectification()
-        try:
-            left, right = rectifier.rectify(left, right)
-        except (ValueError, RuntimeError):
-            left, right = left_image, right_image
+        left, right = rectifier.rectify(left, right)
 
-    raw_disparity, _ = compute_disparity(left, right, config)
+    # Computed once and reused for both SGBM matching (below) and
+    # traversability texture analysis — compute_disparity used to
+    # convert left to grayscale internally, duplicating this exact
+    # conversion on the same input every call.
+    gray = left if left.ndim == 2 else cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
+
+    raw_disparity, _ = compute_disparity(
+        left, right, config, left_gray=gray, compute_visualization=False,
+    )
     depth_map = estimate_depth(raw_disparity, calibration)
 
-    gray = left if left.ndim == 2 else cv2.cvtColor(left, cv2.COLOR_BGR2GRAY)
     traversability = classify_traversability(gray, raw_disparity, depth_map, config)
     obstacles = detect_obstacles(depth_map, config, raw_disparity=raw_disparity)
 

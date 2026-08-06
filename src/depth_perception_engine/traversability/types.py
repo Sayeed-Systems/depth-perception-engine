@@ -20,6 +20,16 @@ class TextureClass(str, Enum):
 class RegionClass(str, Enum):
     """Navigation-relevant classification of one grid region.
 
+    UNKNOWN              — HARD FLOOR: fewer valid disparity pixels than
+                            RegionAnalyzer's min_valid_pixels threshold.
+                            Returned unconditionally before any other signal
+                            (texture, entropy, confidence) is even
+                            considered — see RegionAnalyzer._classify. A
+                            region with insufficient stereo evidence has, by
+                            definition, no basis for any of the classes
+                            below and must never be reported as one of them.
+                            SceneInterpreter treats UNKNOWN as ambiguous, so
+                            it can never itself produce MOVE_FORWARD.
     CLEAR                — confident reading, no obstacle within range
     OBSTACLE             — confident reading, something close
     LOW_TEXTURE_UNKNOWN  — too little texture/disparity to judge either way
@@ -30,6 +40,7 @@ class RegionClass(str, Enum):
     LOW_CONFIDENCE       — generic catch-all for an unreliable reading that
                             doesn't fit the more specific categories above
     """
+    UNKNOWN             = "UNKNOWN"
     CLEAR               = "CLEAR"
     OBSTACLE            = "OBSTACLE"
     LOW_TEXTURE_UNKNOWN = "LOW_TEXTURE_UNKNOWN"
@@ -62,6 +73,15 @@ class RegionStats:
     valid_pct:   float   # % of pixels with usable disparity
     invalid_pct: float   # 100 - valid_pct
     invalid_ratio: float  # invalid_pct / 100, kept as its own field per spec
+
+    # Absolute pixel counts backing valid_pct/invalid_pct above. Exposed
+    # separately (not just derivable from valid_pct + region bounds)
+    # because valid_pct is a lossy float division of these two integers —
+    # a consumer that needs the exact count RegionAnalyzer itself gated
+    # min_valid_pixels on (e.g. an independent, out-of-process validity
+    # check) must not have to reconstruct it via a float round-trip.
+    valid_count:  int
+    total_pixels: int
 
     depth_avg_m:    float
     depth_median_m: float
