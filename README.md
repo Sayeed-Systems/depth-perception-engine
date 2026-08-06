@@ -91,12 +91,47 @@ Operations performed:
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .              # library only — numpy + opencv-python-headless
-pip install -e ".[dev]"       # + pytest, for running tests/
+pip install -e ".[dev]"       # + pytest/pytest-cov/pytest-mock, for running tests/
 ```
 
 No camera, no display, and no ROS installation required for the library
 itself. See [Running the examples](#running-the-examples) below for the
 one extra step needed for the GUI demo.
+
+## Development Setup
+
+The canonical workflow for working on this repository — nothing beyond
+these four commands is required on a fresh clone:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e ".[dev]"
+python -m pytest
+```
+
+`pip install -e ".[dev]"` installs the library in editable mode (src-layout
+— edits under `src/depth_perception_engine/` are picked up immediately, no
+reinstall needed) plus the full test toolchain: `pytest`, `pytest-cov`,
+`pytest-mock`. `python -m pytest` then runs the full suite (162 tests as of
+this writing) using this project's own `[tool.pytest.ini_options]`
+configuration in `pyproject.toml` — no separate pytest config file, no
+`PYTHONPATH` juggling required.
+
+Other installable extras, same pattern:
+
+```bash
+pip install -e ".[docs]"      # reserved for a future docs build tool — currently installs nothing extra
+pip install -e ".[all]"       # dev + docs together
+```
+
+Coverage is available on demand (not enabled by default, to keep a plain
+`pytest` run's output uncluttered):
+
+```bash
+pytest --cov=depth_perception_engine
+```
 
 ## Quick start
 

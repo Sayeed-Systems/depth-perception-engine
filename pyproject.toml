@@ -31,13 +31,34 @@ dependencies = [
 # There is deliberately no "examples" extra here that would install both.
 test = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.11",
 ]
 dev = [
     "depth-perception-engine[test]",
+]
+# No docs build tool is in use today — every file under docs/ is plain,
+# directly-readable Markdown (plus a few pre-rendered Graphviz diagrams
+# committed as static .svg, not generated at install/build time). This
+# extra exists so `pip install -e ".[docs]"` is a stable, always-available
+# command rather than something added later as a breaking workflow change
+# — see README.md's Development Setup section.
+docs = []
+all = [
+    "depth-perception-engine[dev,docs]",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
+minversion = "7.0"
 testpaths = ["tests"]
+# Defensive, not strictly required today: `pip install -e .` already makes
+# depth_perception_engine importable from anywhere via its editable install,
+# which is why the full suite already passes without this. Set anyway so
+# `pytest`/`python -m pytest` resolves the src-layout package correctly
+# even if invoked in an environment where the editable install step was
+# skipped or is stale.
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
