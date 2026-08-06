@@ -26,7 +26,7 @@ docker exec mp01_ros2 bash -lc '
 
 - **Before this pass:** 67 tests, all passing.
 - **After this pass:** 131 tests, all passing, 0.89s wall time. +64 new tests: `tests/test_distance_reader.py` (21, new file — closes a real coverage gap on a previously-untested public class), `tests/test_pipeline_config.py` (24, new file — validates the new `__post_init__`), `tests/test_pipeline.py` additions (22 — `from_config`, `process_observation`, timestamp pass-through, validity masks, `reset`/`close`/`health` lifecycle), `tests/test_depth_estimator.py` additions (5 — the new analytic known-value class).
-- `colcon test --packages-select depth_perception_engine mp01_perception` inside the `mp01_ros2` container (this repo's own tests plus flake8/pep257 lint): **64 passed / 3 skipped** here, **157 passed / 1 skipped** in `mp01_perception` (zero regression, as expected — every change this pass made was additive, `mp01_perception` was not touched).
+- `colcon test --packages-select depth_perception_engine mp01_perception` inside the `mp01_ros2` container (this repo's own tests plus flake8/pep257 lint), re-run after syncing this pass's changes into the vendored copy (`git fetch` + `merge --ff-only` from this repo, same discipline as the earlier drift-reconciliation pass): **128 passed / 3 skipped** here (up from 64/3 before this pass — the 64 new tests, plus flake8/pep257 passing clean on every new file), **157 passed / 1 skipped** in `mp01_perception`, unchanged (zero regression, as expected — every change this pass made was additive, `mp01_perception` was not touched).
 
 ## Numerical validation
 
