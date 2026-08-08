@@ -397,7 +397,7 @@ Real calibrated USB global-shutter stereo rig, `/dev/video0`, `examples/e7_live_
 Placed in the repository's existing `docs/assets/` structure, continuing its established numbering:
 - `docs/assets/07_level3_baseline.png` — baseline real scene, DEGRADED, SLOW_DOWN-adjacent state
 - `docs/assets/08_level3_degraded_occlusion.png` — real partial occlusion, navigation decision `SLOW_DOWN`
-- `docs/assets/09_level3_healthy_scene.png` — real clear scene, navigation decision `MOVE_FORWARD`, contrasting directly with the occlusion frame above
+- `docs/assets/09_level3_healthy_scene.png` / `docs/assets/10_level3_live_demo.gif` — re-captured (post-freeze) desk/monitor scene, `DEGRADED`, navigation decision `STOP` (a real nearby obstacle at ~0.32m drives this, not a defect) — regenerate anytime with `python examples/capture_readme_snapshot.py` / `python examples/generate_demo_gif.py`, both with a 6-second on-screen countdown to reposition the scene first
 
 Reproduce: `pip install -e ".[viz]"` then `python examples/visualize_level3.py --live` (or `--left/--right` with saved `.npy` frames). No large raw recordings were committed — only the three rendered PNGs above.
 
