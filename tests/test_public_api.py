@@ -262,6 +262,13 @@ class TestInternalContractsStayNonPublic:
         "DisparityEngine", "RectificationEngine", "DepthEstimator",
         "DistanceReader", "ThreatAssessor", "RegionAnalyzer",
         "SceneInterpreter", "FrameSplitter",
+        # Level 3 producers (E2-E6) — geometry.* stays Tier 3 throughout,
+        # see docs/LEVEL3_PUBLIC_API.md's E3 update for why PointCloud
+        # itself was deliberately not promoted even once it had a real
+        # producer.
+        "PointCloudBuilder", "transform_point_cloud", "build_obstacle_cloud",
+        "build_free_space_rays", "build_geometry_metrics", "GeometryQuality",
+        "classify_geometry_quality",
     ]
 
     def test_no_internal_symbol_is_a_root_attribute(self):

@@ -45,6 +45,70 @@ class PipelineConfig:
     traversability_grid_cols: int = 3
     traversability_ambiguous_fraction_thresh: float = 0.50
 
+    # --- geometry (Level 3, Phase E3) ---
+    # Gates DepthPerceptionPipeline.process()'s camera-optical-frame
+    # PointCloud stage (geometry.PointCloudBuilder — see
+    # docs/LEVEL3_ARCHITECTURE.md). Default is explicitly False: geometry
+    # is additional compute cost (see docs/VALIDATION_REPORT.md's E3
+    # benchmark) that every existing caller — including mp01_perception,
+    # which does not know this field exists — must not start paying for
+    # or receiving without opting in. False also reproduces pre-E3
+    # behavior exactly: DepthPerceptionResult.geometry stays None, and no
+    # PointCloudBuilder is even constructed. No __post_init__ check is
+    # added below for this field: it is a plain bool with no invalid
+    # *value* to reject (unlike e.g. block_size, which has a real
+    # constraint), so a value check would be validation theater.
+    enable_geometry: bool = False
+
+    # --- E5 spatial evidence (ObstacleCloud / FreeSpaceRays) ---
+    # Both default False — additional compute cost on top of enable_geometry,
+    # same "opt-in, existing callers unaffected" discipline as
+    # enable_geometry itself. Neither has any effect unless enable_geometry
+    # is also True AND a body_T_camera_left extrinsic was supplied to the
+    # pipeline (E5 operates on the E4 body-frame cloud only — see
+    # docs/LEVEL3_ARCHITECTURE.md's E5 update); with no body-frame cloud
+    # there is nothing for either to filter/cast rays from.
+    enable_obstacle_geometry: bool = False
+    enable_free_space_rays: bool = False
+
+    # Range window (Euclidean distance from the camera's own origin, not
+    # the body origin — matches ObstacleCloud.distances_m's frozen
+    # docstring) an ObstacleCloud point must fall within. Defaults are
+    # deliberately unbounded ("no additional restriction beyond what the
+    # sensor itself already enforces upstream" — every valid point is
+    # already clamped to [DepthEstimator.MIN_DEPTH_M, MAX_DEPTH_M] in
+    # camera-frame depth before this stage ever runs), not a new
+    # MP01-specific or hardware-specific number.
+    obstacle_min_range_m: float = 0.0
+    obstacle_max_range_m: float = float("inf")
+
+    # 2D grid decimation applied identically by both build_obstacle_cloud
+    # and build_free_space_rays (see their shared `stride` semantics) —
+    # one shared knob rather than two independent ones, since both
+    # producers read the same source PointCloud and "keep every Nth
+    # pixel" means the same thing for either. 1 = no downsampling
+    # (deterministic default — every pixel considered, same as every
+    # other geometry stage's default behavior).
+    geometry_sampling_stride: int = 1
+
+    # --- E6 geometry quality classification thresholds ---
+    # Consumed by geometry.classify_geometry_quality(), an opt-in helper
+    # (not auto-invoked by process() — see docs/IMPLEMENTATION_STATUS.md's
+    # E6 addendum for why) that maps GeometryMetrics.valid_fraction — a
+    # single, already-precisely-defined metric, not a new blended score —
+    # onto one of GeometryQuality.HEALTHY/DEGRADED/NO_USABLE_GEOMETRY.
+    # These two fractions are a POLICY choice, not a physical constant:
+    # there is no universally correct "enough valid geometry" threshold —
+    # it depends on sensor, scene, and how the caller intends to use the
+    # geometry. The defaults below are conservative, undocumented-against-
+    # any-real-dataset placeholders, not tuned/validated values — a real
+    # deployment is expected to override them for its own sensor/scene.
+    # valid_fraction >= geometry_healthy_min_valid_fraction        -> HEALTHY
+    # geometry_degraded_min_valid_fraction <= valid_fraction < ... -> DEGRADED
+    # valid_fraction < geometry_degraded_min_valid_fraction        -> NO_USABLE_GEOMETRY
+    geometry_healthy_min_valid_fraction: float = 0.5
+    geometry_degraded_min_valid_fraction: float = 0.05
+
     def resolved_obstacle_dead_zone_px(self) -> int:
         """obstacle_dead_zone_px if set, else num_disparities."""
         return (
@@ -112,4 +176,34 @@ class PipelineConfig:
             raise ValueError(
                 "traversability_ambiguous_fraction_thresh "
                 f"({self.traversability_ambiguous_fraction_thresh}) must be in [0, 1]."
+            )
+        if self.obstacle_min_range_m < 0.0:
+            raise ValueError(
+                f"obstacle_min_range_m ({self.obstacle_min_range_m}) must be >= 0."
+            )
+        if not (self.obstacle_min_range_m <= self.obstacle_max_range_m):
+            raise ValueError(
+                "Require obstacle_min_range_m <= obstacle_max_range_m, got "
+                f"obstacle_min_range_m={self.obstacle_min_range_m}, "
+                f"obstacle_max_range_m={self.obstacle_max_range_m}."
+            )
+        if self.geometry_sampling_stride < 1:
+            raise ValueError(
+                f"geometry_sampling_stride ({self.geometry_sampling_stride}) must be >= 1."
+            )
+        if not (0.0 <= self.geometry_degraded_min_valid_fraction <= 1.0):
+            raise ValueError(
+                "geometry_degraded_min_valid_fraction "
+                f"({self.geometry_degraded_min_valid_fraction}) must be in [0, 1]."
+            )
+        if not (0.0 <= self.geometry_healthy_min_valid_fraction <= 1.0):
+            raise ValueError(
+                "geometry_healthy_min_valid_fraction "
+                f"({self.geometry_healthy_min_valid_fraction}) must be in [0, 1]."
+            )
+        if not (self.geometry_degraded_min_valid_fraction <= self.geometry_healthy_min_valid_fraction):
+            raise ValueError(
+                "Require geometry_degraded_min_valid_fraction <= geometry_healthy_min_valid_fraction, got "
+                f"geometry_degraded_min_valid_fraction={self.geometry_degraded_min_valid_fraction}, "
+                f"geometry_healthy_min_valid_fraction={self.geometry_healthy_min_valid_fraction}."
             )

@@ -167,6 +167,19 @@ result.obstacles              # ObstacleAssessment: per-beam nearest-obstacle sc
 result.confidence              # float, 0..1
 result.processing_time_ms     # float
 result.timestamp              # Optional[float] — only set if you pass left_timestamp/right_timestamp
+result.geometry                # Optional[geometry.PointCloud] — None unless PipelineConfig(enable_geometry=True);
+                                # camera-optical-frame (X right, Y down, Z forward) XYZ per pixel, metres,
+                                # (H, W, 3) float32, NaN where invalid — see docs/DATA_CONTRACTS.md
+result.geometry_body           # Optional[geometry.PointCloud] — None unless enable_geometry=True AND a
+                                # body_T_camera_left extrinsic was passed to the pipeline; BODY frame
+                                # (X forward, Y left, Z up), same shape/units/invalid convention as geometry
+result.obstacle_cloud          # Optional[geometry.ObstacleCloud] — None unless enable_obstacle_geometry=True;
+                                # unorganized (N, 3) float32, BODY frame, range-filtered valid surface points
+result.free_space_rays         # Optional[geometry.FreeSpaceRays] — None unless enable_free_space_rays=True;
+                                # one (origin, direction, range) ray per valid pixel — never fabricated for
+                                # invalid/unknown pixels
+result.geometry_metrics        # Optional[geometry.GeometryMetrics] — populated whenever geometry_body exists;
+                                # valid_fraction, point_count, min_obstacle_distance_m, mean_free_space_m
 
 pipeline.health()              # PipelineHealth: is_closed, frames_processed, last_confidence, ...
 pipeline.reset()                # clears cross-frame smoothing state, keeps calibration/config
@@ -181,6 +194,58 @@ same call shape run standalone (no camera), and
 [`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md) for
 exactly how MP-01's ROS2 `mp01_perception` package will call this later.
 
+## Level 3: 3D geometry (frozen)
+
+Beyond the Level 0-2 fields above, `DepthPerceptionPipeline` can optionally
+produce full 3D geometric perception — metric depth turned into an actual
+point cloud, transformed into the vehicle body frame, and reduced to
+obstacle/free-space evidence with explicit unknown-space semantics. All of
+it is opt-in (every flag defaults `False`/`None`) and purely additive to
+the Level 0-2 fields above.
+
+**What Level 3 includes:**
+- Metric depth with explicit confidence/validity (Level 0-2, always on)
+- Camera-optical-frame 3D point cloud (`result.geometry`)
+- Body-frame 3D point cloud, via a calibrated extrinsic (`result.geometry_body`)
+- Obstacle surface evidence (`result.obstacle_cloud`)
+- Free-space ray evidence, terminating at observed surfaces, never behind them (`result.free_space_rays`)
+- Explicit UNKNOWN-space preservation — invalid/unobserved regions are never rendered as free or occupied, anywhere in the chain
+- Scalar geometry-quality metrics and an opt-in HEALTHY/DEGRADED/NO_USABLE_GEOMETRY classifier (`result.geometry_metrics`, `geometry.classify_geometry_quality`)
+
+**What Level 3 explicitly does NOT include:** a persistent map, temporal
+fusion across frames, IMU/motion compensation, a vehicle collision
+envelope, collision-risk scoring, learned/neural stereo, semantic
+perception, localization, or planning. See
+[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and
+[`docs/E7_IMPLEMENTATION_PLAN.md`](docs/E7_IMPLEMENTATION_PLAN.md) for what
+remains open beyond Level 3.
+
+```python
+from depth_perception_engine.frames import FrameId, RigidTransform
+
+body_T_camera_left = RigidTransform(       # measured, calibrated extrinsic — see docs/COORDINATE_FRAMES.md
+    rotation=..., translation=...,          # (3,3), (3,) — camera pose expressed in the body frame
+    from_frame=FrameId.CAMERA_OPTICAL_LEFT, to_frame=FrameId.BODY,
+)
+config = PipelineConfig(enable_geometry=True, enable_obstacle_geometry=True, enable_free_space_rays=True)
+pipeline = DepthPerceptionPipeline(config, calibration, body_T_camera_left=body_T_camera_left)
+```
+
+A standalone visual validation tool (outside the core engine — requires
+`pip install -e ".[viz]"`) renders the left image, disparity, depth, and
+BODY-frame geometry (with explicit axes) side by side:
+
+```bash
+pip install -e ".[viz]"
+python examples/visualize_level3.py --live      # one real camera frame
+```
+
+![Level 3 geometry example](docs/assets/09_level3_healthy_scene.png)
+
+Live demo (left image, disparity, metric depth, BODY-frame top-down geometry — all four panels are the real, unmodified `DepthPerceptionResult` from a live camera, reproduce with `python examples/generate_demo_gif.py`):
+
+![Level 3 live demo](docs/assets/10_level3_live_demo.gif)
+
 ## Pipeline
 
 ```
@@ -188,6 +253,7 @@ exactly how MP-01's ROS2 `mp01_perception` package will call this later.
   → rectify (calibrated)                     stereo.RectificationEngine
   → disparity (SGBM)                         stereo.DisparityEngine
   → depth estimation                          depth.DepthEstimator
+  → 3D geometry (opt-in, camera frame only)   geometry.PointCloudBuilder
   → traversability grid + nav decision        traversability.SceneInterpreter
   → per-beam obstacle scan                    obstacles.ThreatAssessor
   → fused DepthPerceptionResult                fusion.result_builder

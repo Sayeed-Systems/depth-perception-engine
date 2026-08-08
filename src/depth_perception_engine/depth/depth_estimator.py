@@ -155,28 +155,63 @@ class DepthEstimator:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Return XYZ point cloud and a boolean validity mask.
 
+        Uses this codebase's own explicit invalid-disparity convention
+        (non-finite, or <= 0 — identical to estimate()'s rule) rather than
+        cv2.reprojectImageTo3D's own handleMissingValues sentinel. That
+        sentinel only special-cases whichever disparity value happens to
+        be the *frame's minimum*, which is a different rule: it can (a)
+        incorrectly flag a legitimate small-but-positive disparity as
+        invalid purely because it is the frame's minimum, and (b) fail to
+        flag a genuinely invalid disparity (e.g. exactly 0) that is not
+        the frame's minimum, letting cv2 silently produce a finite,
+        in-range X/Y/Z for it. This method previously used
+        handleMissingValues=True and had exactly that bug — fixed here by
+        masking disparity explicitly, before reprojection, the same way
+        estimate() already does. X, Y, and Z are each checked for
+        finiteness (not just Z) — a degenerate Q could in principle
+        produce a non-finite X/Y even where Z is finite and in-range.
+
         Args:
-            disparity: float32 disparity map (pixels).
+            disparity: float32 ndarray of disparity values (pixels), shape
+                       (H, W).
 
         Returns:
             ``(points_3d, valid_mask)`` where *points_3d* is a (H, W, 3)
-            float32 array of (X, Y, Z) in metres and *valid_mask* is a (H, W)
-            bool array marking finite, in-range points.
+            float32 array of (X, Y, Z) in metres — 0.0 at every pixel
+            where *valid_mask* is False, matching estimate()'s
+            0.0-invalid convention — and *valid_mask* is a (H, W) bool
+            array marking finite, in-range points.
+
+        Raises:
+            TypeError: If disparity is not a numpy ndarray.
+            ValueError: If disparity does not have exactly 2 dimensions.
         """
         if not isinstance(disparity, np.ndarray):
             raise TypeError(
                 f"disparity must be numpy.ndarray, got {type(disparity).__name__}."
             )
+        if disparity.ndim != 2:
+            raise ValueError(
+                f"disparity must have exactly 2 dimensions (H, W), got {disparity.ndim}."
+            )
 
-        points_3d = cv2.reprojectImageTo3D(
-            disparity.astype(np.float32), self._Q, handleMissingValues=True
-        ).astype(np.float32)
-        points_3d /= 1000.0  # mm → m
+        disp_f = disparity.astype(np.float32)
+        invalid_disp = ~np.isfinite(disp_f) | (disp_f <= 0.0)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            points_mm = cv2.reprojectImageTo3D(
+                disp_f, self._Q, handleMissingValues=False
+            )
+        points_3d = (points_mm / 1000.0).astype(np.float32)  # mm → m
 
         z = points_3d[:, :, 2]
         valid_mask = (
-            np.isfinite(z) & (z >= self.MIN_DEPTH_M) & (z <= self.MAX_DEPTH_M)
+            ~invalid_disp
+            & np.all(np.isfinite(points_3d), axis=-1)
+            & (z >= self.MIN_DEPTH_M)
+            & (z <= self.MAX_DEPTH_M)
         )
+        points_3d[~valid_mask] = 0.0
 
         return points_3d, valid_mask
 

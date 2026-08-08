@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from depth_perception_engine.calibration.models import StereoCalibration
+from depth_perception_engine.geometry.types import FreeSpaceRays, GeometryMetrics, ObstacleCloud, PointCloud
 from depth_perception_engine.traversability.types import NavigationDecision, RegionStats
 
 
@@ -94,6 +95,59 @@ class DepthPerceptionResult:
     docs/IMPLEMENTATION_STATUS.md. Left as-is because mp01_perception reads
     this field by name today; renaming it is a breaking change out of this
     recovery task's scope.
+
+    geometry (Level 3, Phase E3): camera-optical-frame 3D point cloud —
+    None unless PipelineConfig.enable_geometry is True. When present,
+    geometry.frame_id == frames.FrameId.CAMERA_OPTICAL_LEFT always.
+    geometry.valid_mask marks which pixels have a real (non-NaN) point,
+    mirroring valid_depth_mask's role one level up. Added at the end,
+    defaulted to None, so this field is purely additive — every existing
+    caller (including mp01_perception, and every pre-E3 test) is
+    byte-for-byte unaffected. See docs/DATA_CONTRACTS.md for the full
+    contract and docs/LEVEL3_ARCHITECTURE.md for why this is PointCloud
+    directly, not the undefined GeometryResult composite
+    docs/E2_IMPLEMENTATION_PLAN.md had sketched.
+
+    geometry_body (Level 3, Phase E4): body-frame 3D point cloud — None
+    unless *both* PipelineConfig.enable_geometry is True *and* a
+    body_T_camera_left extrinsic was supplied to
+    DepthPerceptionPipeline's constructor (there is no camera-frame
+    `geometry` to transform otherwise, and this library never assumes a
+    missing extrinsic means identity — see
+    calibration.contracts.RigCalibration's docstring). When present,
+    geometry_body.frame_id == frames.FrameId.BODY, and it is the exact
+    same points as `geometry` with frames.RigidTransform's own frozen
+    convention applied (rotation @ p + translation) — same valid_mask
+    (copied, not recomputed), same timestamp. `geometry` itself is never
+    replaced or mutated by this — both coexist so a caller that only
+    trusts the E2/E3-verified camera frame is unaffected by whether body
+    extrinsics happen to be configured. Reuses geometry.PointCloud
+    directly, the same "don't invent a new type" reasoning as `geometry`
+    above — see docs/LEVEL3_ARCHITECTURE.md's E4 update.
+
+    obstacle_cloud / free_space_rays / geometry_metrics (Level 3, Phase
+    E5): structured spatial evidence derived from `geometry_body` — None
+    unless `geometry_body` itself is present (PipelineConfig.enable_geometry
+    True and a body_T_camera_left extrinsic supplied) and the
+    corresponding PipelineConfig.enable_obstacle_geometry /
+    enable_free_space_rays flag is True. `obstacle_cloud`/`free_space_rays`
+    both use FrameId.BODY, same as `geometry_body`. Not renamed/reused
+    from `obstacles` (the existing per-beam ObstacleAssessment field,
+    Level 0-2) — that field is a different, older, 2D-beam-scan concept
+    this pass does not touch or replace; `obstacle_cloud` is a distinct,
+    3D, geometric concept. `geometry_metrics` is populated whenever
+    `geometry_body` exists, independent of the other two flags (cheap
+    scalar aggregation, no separate gate — see
+    geometry.build_geometry_metrics's docstring for why its
+    `min_obstacle_distance_m`/`mean_free_space_m` fields are simply None
+    when the corresponding cloud/rays were not computed this call).
+    Reuses geometry.ObstacleCloud/FreeSpaceRays/GeometryMetrics directly —
+    same "don't invent a new type" reasoning as `geometry`/`geometry_body`
+    above. See docs/LEVEL3_ARCHITECTURE.md's E5 update and
+    docs/DATA_CONTRACTS.md for the full contract, including the frozen
+    field-set mismatches (no timestamp on ObstacleCloud/FreeSpaceRays; no
+    max-distance/count fields on GeometryMetrics) reported rather than
+    silently resolved by adding fields to those frozen types.
     """
     disparity_map: np.ndarray
     depth_map: np.ndarray
@@ -104,6 +158,11 @@ class DepthPerceptionResult:
     valid_disparity_mask: Optional[np.ndarray] = None
     valid_depth_mask: Optional[np.ndarray] = None
     timestamp: Optional[float] = None
+    geometry: Optional[PointCloud] = None
+    geometry_body: Optional[PointCloud] = None
+    obstacle_cloud: Optional[ObstacleCloud] = None
+    free_space_rays: Optional[FreeSpaceRays] = None
+    geometry_metrics: Optional[GeometryMetrics] = None
 
 
 @dataclass(frozen=True, slots=True)

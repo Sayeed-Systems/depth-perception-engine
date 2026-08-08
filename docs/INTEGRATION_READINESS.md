@@ -18,6 +18,23 @@
 > against `mp01_perception`'s actual, current `perception_processor.py`
 > this pass: it already uses the top-level form independently — this
 > doc's example now matches real usage, not just the original plan.
+>
+> **STATUS UPDATE (2026-08-07, Level 3 freeze, Phases E2-E7):** camera/body-
+> frame 3D geometry, obstacle/free-space evidence, and geometry quality
+> classification were added since the update above — all strictly
+> additive (`PipelineConfig.enable_geometry`/`enable_obstacle_geometry`/
+> `enable_free_space_rays` all default `False`; `DepthPerceptionPipeline`'s
+> new `body_T_camera_left` constructor parameter defaults `None`). **This
+> integration seam is completely unaffected**: `mp01_perception`'s existing
+> `PerceptionProcessor.process()` call, unmodified, continues to receive
+> exactly the fields it already reads — `disparity_map`/`depth_map`/
+> `traversability_mask`/`obstacles`/`confidence`/`processing_time_ms` — and
+> nothing else, unless `mp01_perception` is deliberately changed to opt in
+> to the new `geometry`/`geometry_body`/`obstacle_cloud`/`free_space_rays`/
+> `geometry_metrics` fields, which this pass did not do (`mp01_perception`
+> itself was not modified — see `docs/VALIDATION_REPORT.md`'s E7 addendum).
+> See `docs/LEVEL3_ARCHITECTURE.md`/`docs/DATA_CONTRACTS.md` for what those
+> fields are, if a future `mp01_perception` change wants to consume them.
 
 Status (as originally written): this library is ready to be imported. **No
 integration has been performed yet** — `mp01_ws` is untouched. This document

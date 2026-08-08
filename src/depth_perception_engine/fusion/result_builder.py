@@ -14,6 +14,9 @@ This module holds no state and calls no cv2/algorithm code itself; it only
 assembles values already computed by the other stages.
 """
 
+from typing import Optional
+
+from depth_perception_engine.geometry.types import FreeSpaceRays, GeometryMetrics, ObstacleCloud, PointCloud
 from depth_perception_engine.models.result import (
     BeamReading,
     DepthPerceptionResult,
@@ -44,6 +47,11 @@ def build_result(
     obstacles: ObstacleAssessment,
     processing_time_ms: float,
     timestamp=None,
+    geometry: Optional[PointCloud] = None,
+    geometry_body: Optional[PointCloud] = None,
+    obstacle_cloud: Optional[ObstacleCloud] = None,
+    free_space_rays: Optional[FreeSpaceRays] = None,
+    geometry_metrics: Optional[GeometryMetrics] = None,
 ) -> DepthPerceptionResult:
     """Assemble the final structured pipeline output.
 
@@ -52,6 +60,17 @@ def build_result(
     — disparity <= 0, depth == 0 — used identically by DisparityEngine,
     DepthEstimator, and RegionAnalyzer already; see
     docs/DATA_CONTRACTS.md.
+
+    geometry (E3) / geometry_body (E4) / obstacle_cloud, free_space_rays,
+    geometry_metrics (E5): all pass-through only — this function does not
+    build/transform/filter/aggregate any of them itself (that's
+    geometry.PointCloudBuilder / geometry.transform_point_cloud /
+    geometry.build_obstacle_cloud / geometry.build_free_space_rays /
+    geometry.build_geometry_metrics, invoked by the caller before
+    build_result()); all default to None, identical in spirit to
+    timestamp's pass-through-or-None convention above, so every existing
+    call site (including pipeline.api's process_stereo_pair, which never
+    passes any of them) is unaffected.
     """
     return DepthPerceptionResult(
         disparity_map=disparity_map,
@@ -63,4 +82,9 @@ def build_result(
         valid_disparity_mask=disparity_map > 0,
         valid_depth_mask=depth_map > 0,
         timestamp=timestamp,
+        geometry=geometry,
+        geometry_body=geometry_body,
+        obstacle_cloud=obstacle_cloud,
+        free_space_rays=free_space_rays,
+        geometry_metrics=geometry_metrics,
     )

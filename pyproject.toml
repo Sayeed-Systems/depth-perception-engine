@@ -44,8 +44,18 @@ dev = [
 # command rather than something added later as a breaking workflow change
 # — see README.md's Development Setup section.
 docs = []
+# Level 3, Phase E7: examples/visualize_level3.py's only extra dependency.
+# Deliberately optional — the core library (src/depth_perception_engine/)
+# never imports matplotlib anywhere; only this one examples/ script does.
+# `pip install -e .` (no extras) continues to be sufficient for the whole
+# library and its test suite, matching every other examples/*.py script's
+# existing "core stays minimal, examples/ opts into what it needs" pattern
+# (e.g. live_demo.py's opencv-python swap, documented above).
+viz = [
+    "matplotlib>=3.5",
+]
 all = [
-    "depth-perception-engine[dev,docs]",
+    "depth-perception-engine[dev,docs,viz]",
 ]
 
 [tool.setuptools.packages.find]

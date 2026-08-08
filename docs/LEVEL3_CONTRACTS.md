@@ -32,7 +32,7 @@ No other field changed. This satisfies the "observation contract" ask (left imag
 
 ## Geometry contracts — `geometry.types`
 
-Interfaces only — see that module's own docstrings for the full per-field unit/shape/ownership documentation; summarized here:
+Interfaces only, as originally frozen at E1 — see that module's own docstrings for the full per-field unit/shape/ownership documentation; summarized here. **The table below is the original E1 freeze, unmodified** (these are still interface-only contracts, no field/shape/type here changed); the "Producer today" column is corrected below the table to reflect E2/E4 reality rather than edited in place, so the frozen row values themselves are never touched:
 
 | Type | Represents | Shape | Frame-aware | Producer today |
 |---|---|---|---|---|
@@ -41,10 +41,18 @@ Interfaces only — see that module's own docstrings for the full per-field unit
 | `FreeSpaceRays` | Rays to nearest obstacle/max range | `origins/directions: (N, 3)`, `ranges_m: (N,)` | Yes | **None** |
 | `GeometryMetrics` | Scalar summary stats | scalars | No | **None** |
 
+> **Correction (2026-08-06, Phases E2 & E4):** `PointCloud` is no longer producer-less. `geometry.PointCloudBuilder.build()` (E2, wired into `DepthPerceptionPipeline` in E3) produces a `PointCloud` in `FrameId.CAMERA_OPTICAL_LEFT`. `geometry.transform_point_cloud()` (E4, wired into the same pipeline) produces a second `PointCloud` in `FrameId.BODY` from the first. `ObstacleCloud`/`FreeSpaceRays`/`GeometryMetrics` remain exactly as frozen — still no producer, E5+.
+>
+> **Correction (2026-08-06, Phase E5):** `ObstacleCloud`/`FreeSpaceRays`/`GeometryMetrics` are no longer producer-less either. `geometry.build_obstacle_cloud()`/`build_free_space_rays()`/`build_geometry_metrics()` (all E5, wired into the same pipeline) populate all three, using exactly the field shapes this table already froze — no field was added to any of the three. Two real prose-vs-frozen-type mismatches surfaced while building against this table (both resolved in favor of the frozen shape, not the E5 task's illustrative prose — see `docs/LEVEL3_ARCHITECTURE.md`'s E5 update for the full account): neither `ObstacleCloud` nor `FreeSpaceRays` has a `timestamp` field, and `FreeSpaceRays` stores `(origins, directions, ranges_m)`, not `(origin, endpoint)` pairs.
+
 All four: `frozen=True, slots=True` dataclasses, `float32` arrays, metres. `PointCloud.points` uses `NaN` (not `0.0`) for invalid pixels — a deliberate departure from `DepthPerceptionResult.depth_map`'s existing `0.0`-means-invalid convention, because `(0, 0, 0)` is a legitimate point directly on the optical axis for a point cloud and must not collide with "no data" the way a scalar depth of `0.0` safely can (0 m depth is never physically meaningful for a single scalar, but the coordinate origin is a real point in 3-space). This inconsistency between `depth_map` and any future `PointCloud` is intentional and documented here explicitly so it isn't mistaken for an oversight later.
 
 Ownership: a future producer allocates and returns fresh arrays on every call — no type here promises safe in-place reuse across calls.
 
-## Result contract — deferred, not changed
+## Result contract — deferred, not changed (as of E1)
 
 `models.DepthPerceptionResult` is **not modified this pass.** `docs/E2_IMPLEMENTATION_PLAN.md` describes adding an optional `geometry: Optional[<GeometryResult>]` field once a real producer exists — not before, per this task's explicit non-goal against implementing geometry now.
+
+> **Update (2026-08-06, Phases E3 & E4):** now modified, additively, exactly per the pattern this section already anticipated — with one deviation from the sketch above, reported rather than silently resolved: E3 added `geometry: Optional[geometry.PointCloud] = None` (not the undefined `GeometryResult` composite this section's original text names — see `docs/LEVEL3_ARCHITECTURE.md`'s E3 update for why). E4 added `geometry_body: Optional[geometry.PointCloud] = None` directly after it, same reasoning. Both default `None`; no existing field was renamed, removed, or reordered — verified by `tests/test_pipeline_geometry.py::TestResultContract` and `tests/test_pipeline_body_frame.py::TestZeroRegression::test_full_e1_through_e3_field_set_matches_pre_e4_snapshot_shape`.
+>
+> **Update (2026-08-06, Phase E5):** three more additive fields appended, same discipline: `obstacle_cloud: Optional[geometry.ObstacleCloud] = None`, `free_space_rays: Optional[geometry.FreeSpaceRays] = None`, `geometry_metrics: Optional[geometry.GeometryMetrics] = None` — all reuse their frozen types directly, all default `None`, all appended after `geometry_body` with no reordering. Verified by `tests/test_pipeline_geometry.py::TestResultContract::test_existing_fields_unchanged_in_name_type_and_order`.
