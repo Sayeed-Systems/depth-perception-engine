@@ -104,9 +104,16 @@ def main() -> None:
     for _ in range(15):
         cap.read()
 
+    print("Position the camera/scene now.")
+    for remaining in range(6, 0, -1):
+        print(f"  capturing in {remaining}...", flush=True)
+        time.sleep(1)
+    print("  CAPTURING NOW")
+
     frames = []
     period = 1.0 / _CAPTURE_HZ
-    print(f"Capturing {_N_FRAMES} real frames at ~{_CAPTURE_HZ} Hz...")
+    print(f"Capturing {_N_FRAMES} real frames at ~{_CAPTURE_HZ} Hz "
+          f"(~{_N_FRAMES / _CAPTURE_HZ:.0f}s total — feel free to move during this window)...")
     for i in range(_N_FRAMES):
         t0 = time.perf_counter()
         ok, frame = cap.read()
