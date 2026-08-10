@@ -269,6 +269,30 @@ class TestInternalContractsStayNonPublic:
         "PointCloudBuilder", "transform_point_cloud", "build_obstacle_cloud",
         "build_free_space_rays", "build_geometry_metrics", "GeometryQuality",
         "classify_geometry_quality",
+        # Level 4 (Phase E1) — temporal.* stays Tier 3, same reasoning as
+        # geometry.* above: nothing produces or consumes a MotionHint yet.
+        "MotionHint",
+        # Level 4 (Phase E2) — temporal history stays Tier 3 too: it is
+        # infrastructure DepthPerceptionPipeline owns internally, not a
+        # symbol a normal caller is meant to construct directly.
+        "TemporalRecord", "TemporalHistory", "TemporalAdmissionStatus",
+        # Level 4 (Phase E3) — same reasoning: computed internally by
+        # process(), not constructed directly by a normal caller.
+        "TemporalConsistency", "TemporalConsistencyState", "compute_temporal_consistency",
+        # Level 4 (Phase E4) — same reasoning.
+        "TemporalStabilization", "TemporalStabilizationState", "compute_temporal_stabilization",
+        # Level 4 (Phase E5) — same reasoning.
+        "RotationCompensationStatus", "compute_rotation_compensation",
+        # Level 4 (Phase E7) — compensate_prior_geometry_with_payload lives
+        # in the same E5 module (shares its reprojection math) but is a
+        # new symbol added at E7; same Tier 3 reasoning.
+        "compensate_prior_geometry_with_payload",
+        # Level 4 (Phase E6) — same reasoning.
+        "MotionAwareReliability", "MotionAwareReliabilityState", "compute_motion_aware_reliability",
+        # Level 4 (Phase E7) — same reasoning: computed internally by
+        # process(), not constructed directly by a normal caller.
+        "TemporalPersistence", "TemporalPersistenceState", "TemporalPersistenceCellState",
+        "TemporalPersistenceTracker",
     ]
 
     def test_no_internal_symbol_is_a_root_attribute(self):

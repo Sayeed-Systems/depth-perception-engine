@@ -320,10 +320,13 @@ class TestZeroRegression:
 class TestResultContract:
     def test_existing_fields_unchanged_in_name_type_and_order(self):
         """dataclasses.fields() in declaration order — proves geometry (E3),
-        geometry_body (E4), and obstacle_cloud/free_space_rays/
-        geometry_metrics (E5) were appended at the end, in that order, and
-        every pre-E3 field name/order/default is untouched (Task 4: do not
-        rename/remove/reorder existing fields)."""
+        geometry_body (E4), obstacle_cloud/free_space_rays/geometry_metrics
+        (E5), temporal_admission_status/temporal_consistency/
+        temporal_stabilization/rotation_compensation_status/
+        motion_aware_reliability/temporal_persistence (Level 4, Phases
+        E2-E7) were appended at the end, in that order, and every earlier
+        field name/order/default is untouched (Task 4: do not rename/
+        remove/reorder existing fields)."""
         fields = dataclasses.fields(DepthPerceptionResult)
         names = [f.name for f in fields]
 
@@ -342,8 +345,14 @@ class TestResultContract:
             "obstacle_cloud",
             "free_space_rays",
             "geometry_metrics",
+            "temporal_admission_status",
+            "temporal_consistency",
+            "temporal_stabilization",
+            "rotation_compensation_status",
+            "motion_aware_reliability",
+            "temporal_persistence",
         ]
-        for field in fields[-5:]:  # geometry, geometry_body, obstacle_cloud, free_space_rays, geometry_metrics
+        for field in fields[-5:]:  # temporal_consistency, temporal_stabilization, rotation_compensation_status, motion_aware_reliability, temporal_persistence
             assert field.default is None
 
     def test_geometry_field_defaults_to_none(self):

@@ -109,6 +109,185 @@ class PipelineConfig:
     geometry_healthy_min_valid_fraction: float = 0.5
     geometry_degraded_min_valid_fraction: float = 0.05
 
+    # --- Level 4, Phase E2: bounded temporal history ---
+    # Gates DepthPerceptionPipeline's temporal.TemporalHistory buffer.
+    # Default False, same "opt-in, existing callers unaffected" discipline
+    # as enable_geometry: False reproduces pre-E2 behavior exactly — no
+    # TemporalHistory is even constructed, DepthPerceptionResult.
+    # temporal_admission_status stays None, zero added cost. See
+    # docs/E2_TEMPORAL_HISTORY_PLAN.md.
+    enable_temporal: bool = False
+
+    # Hard cap on retained TemporalRecord count, independent of timestamp
+    # semantics entirely — protects against a caller feeding unexpectedly
+    # dense/rapid timestamps where the time-window bound alone might
+    # retain far more records than intended. Not tuned against any
+    # dataset; a policy default in the same spirit as
+    # geometry_healthy_min_valid_fraction above (see
+    # docs/E2_TEMPORAL_HISTORY_PLAN.md's Decision 1 for the full
+    # reasoning, including why this is deliberately not derived from an
+    # assumed frame rate).
+    temporal_max_records: int = 30
+
+    # Maximum age (TemporalRecord.timestamp units, relative to the newest
+    # accepted record — never wall-clock time) a retained record may have.
+    # A conservative "recent past" window: comfortably shorter than would
+    # risk unbounded retention, comfortably longer than any single
+    # frame-to-frame interval this project has actually measured (see
+    # docs/VALIDATION_REPORT.md's E7 real-hardware run, ~42 FPS).
+    temporal_max_age_s: float = 1.0
+
+    # Gap (same units) between two consecutively accepted records beyond
+    # which the older history is treated as a genuine timestamp
+    # discontinuity and cleared, rather than bridged — see
+    # docs/E2_TEMPORAL_HISTORY_PLAN.md's Decision 7. Deliberately smaller
+    # than, and independent of, temporal_max_age_s: this answers "is this
+    # arrival continuous with the last one," not "is this record still
+    # recent enough to keep."
+    temporal_gap_limit_s: float = 0.5
+
+    # --- Level 4, Phase E3: read-only temporal consistency ---
+    # 2D grid decimation applied to depth_map before it's retained on a
+    # TemporalRecord (temporal.TemporalRecord.depth_snapshot_m) — reuses
+    # the exact array[::stride, ::stride] pattern
+    # geometry_sampling_stride already established for
+    # build_obstacle_cloud/build_free_space_rays, but is a DIFFERENT,
+    # independent knob: geometry_sampling_stride decimates a
+    # geometry.PointCloud for E5 spatial-evidence products;
+    # temporal_consistency_sampling_stride decimates depth_map for E3
+    # temporal comparison, and has no logical connection to whether
+    # enable_geometry is even True. See docs/E3_IMPLEMENTATION_PLAN.md's
+    # Decision 5 for the exact memory-cost accounting this bounds.
+    temporal_consistency_sampling_stride: int = 4
+
+    # Max absolute depth difference (metres) for one comparable pixel to
+    # count as "agreeing" between the current frame and the most recent
+    # comparable prior frame — see temporal.compute_temporal_consistency().
+    # A policy choice, not a physical constant — "same surface, sensor
+    # noise" tolerance, not derived from any specific rig — same
+    # "conservative, undocumented-against-any-real-dataset placeholder"
+    # discipline as geometry_healthy_min_valid_fraction above.
+    temporal_consistency_agreement_tolerance_m: float = 0.05
+
+    # Minimum agreement_fraction (agreeing_count / comparable_count) for
+    # temporal.TemporalConsistencyState.CONSISTENT; below this is
+    # CONTRADICTORY. Same policy-choice discipline as the fraction above —
+    # see docs/E3_IMPLEMENTATION_PLAN.md's Decision 1.
+    temporal_consistency_min_agreement_fraction: float = 0.7
+
+    # --- Level 4, Phase E4: deterministic, confidence-aware temporal stabilization ---
+    # Gates DepthPerceptionPipeline's stabilization stage. Additional
+    # compute cost ON TOP OF enable_temporal (mirrors
+    # enable_obstacle_geometry/enable_free_space_rays's own precedent of
+    # being gated underneath enable_geometry for the identical "opt-in,
+    # existing callers unaffected" reason) — has no effect unless
+    # enable_temporal is also True (there is no TemporalHistory/
+    # TemporalConsistency to stabilize from otherwise). Default False:
+    # even a caller who already opted into enable_temporal for E2/E3
+    # should not start paying E4's per-pixel array-construction cost
+    # without a second, explicit opt-in.
+    enable_temporal_stabilization: bool = False
+
+    # Minimum previous_record.confidence (Level 0-2's own existing
+    # per-frame scalar, reused as-is — not a new "temporal trust" concept)
+    # for that historical record to be considered at all this frame — see
+    # docs/E4_IMPLEMENTATION_PLAN.md's Decision 2. A policy choice, same
+    # discipline as every other threshold in this file.
+    temporal_stabilization_min_history_confidence: float = 0.3
+
+    # Minimum comparable_count / current_snapshot.size (Phase E3's own
+    # already-computed comparable_count, reused directly) for history to
+    # be considered at all this frame — "sufficient overlapping valid
+    # geometry exists" per docs/E4_IMPLEMENTATION_PLAN.md's Decision 2.
+    # Distinct from E3's own bare comparable_count > 0 check: E3 asks "can
+    # I classify at all," this asks "is there enough to bother producing
+    # a stabilization claim."
+    temporal_stabilization_min_comparable_fraction: float = 0.1
+
+    # --- Level 4, Phase E5: short-window rotational motion compensation ---
+    # Gates DepthPerceptionPipeline's rotation-compensation stage. Nested
+    # underneath enable_temporal (no effect unless it is also True — there
+    # is no TemporalHistory/previous record to compensate otherwise) and
+    # independent of enable_temporal_stabilization (E5 can usefully feed
+    # E3-only consumers too, not just E4's stabilization) — same "opt-in
+    # flag nested under a broader one" precedent as
+    # enable_obstacle_geometry/enable_free_space_rays under enable_geometry,
+    # and enable_temporal_stabilization under enable_temporal. Default
+    # False: even a caller who already opted into enable_temporal for
+    # E2/E3/E4 should not start paying E5's per-pixel reprojection cost
+    # without a third, explicit opt-in. No separate "short window" size
+    # threshold exists — temporal_gap_limit_s above already bounds how
+    # large a previous-to-current interval can be while still being
+    # "continuous" (see docs/LEVEL4_E5_IMPLEMENTATION_PLAN.md's Decision 7).
+    enable_rotation_compensation: bool = False
+
+    # --- Level 4, Phase E6: deterministic motion-aware reliability ---
+    # Gates DepthPerceptionPipeline's reliability-assessment stage.
+    # Nested underneath enable_temporal (no effect unless it is also
+    # True — there is no TemporalConsistency/RotationCompensationStatus
+    # to assess otherwise), but INDEPENDENT of enable_temporal_
+    # stabilization and enable_rotation_compensation: E6 assesses
+    # reliability using whatever E3/E4/E5 state actually exists this
+    # frame, including "E5 disabled" (a fully legitimate configuration,
+    # see docs/LEVEL4_E6_IMPLEMENTATION_PLAN.md section 3's branch 4c) —
+    # it does not require either of those flags to be on. Default False:
+    # a fourth, explicit opt-in, same "opt-in nested under a broader one"
+    # discipline as every prior Level 4 phase's own flag.
+    enable_motion_aware_reliability: bool = False
+
+    # Maximum integrated rotation angle (radians) for a frame with
+    # rotation_compensation_status == APPLIED to still be considered
+    # RELIABLE — beyond this, E5's own zero-order-hold/discretized-
+    # reprojection small-rotation assumptions are no longer trusted. A
+    # policy choice, not a physical constant — 5 degrees, conservative,
+    # not derived from any specific rig's calibration or frame rate. See
+    # docs/LEVEL4_E6_IMPLEMENTATION_PLAN.md section 4 for the full
+    # justification.
+    reliability_max_angular_motion_rad: float = 0.0873  # ~5 degrees
+
+    # Minimum motion_coverage_fraction (fraction of the true previous-to-
+    # current interval actually spanned by accepted MotionHint samples,
+    # as opposed to left as E5's own documented uncompensated residual
+    # tail) for a frame with rotation_compensation_status == APPLIED to
+    # still be considered RELIABLE rather than DEGRADED. Same
+    # policy-choice discipline as the angular threshold above.
+    reliability_min_motion_coverage_fraction: float = 0.5
+
+    # --- Level 4, Phase E7: deterministic per-cell temporal persistence ---
+    # Gates DepthPerceptionPipeline's persistence-classification stage
+    # (temporal.persistence.TemporalPersistenceTracker). Nested underneath
+    # BOTH enable_temporal and enable_motion_aware_reliability (no effect
+    # unless both are also True — persistence requires E6's own
+    # reliability verdict to gate whether a frame may create/reinforce
+    # support, see docs/LEVEL4_E7_IMPLEMENTATION_PLAN.md's Rule 7), same
+    # "opt-in flag nested under a broader one" precedent as every prior
+    # Level 4 phase's own flag. Default False: a fifth, explicit opt-in.
+    enable_temporal_persistence: bool = False
+
+    # Minimum per-cell support_count_grid value (consecutive
+    # chronologically-agreeing observations) for
+    # temporal.persistence.TemporalPersistenceCellState to read PERSISTENT
+    # rather than NEW. Must be >= 2 — a single observation can never
+    # become PERSISTENT (an explicit, hard architectural rule, not a
+    # policy default that could be tuned down to 1). 2 is the smallest
+    # legal value: exactly one repeat is the minimum meaningful definition
+    # of "repeated chronological support."
+    persistence_min_support_count: int = 2
+
+    # Consecutive absent frames (current decimated depth <= 0.0 at that
+    # cell) a previously-PERSISTENT cell may tolerate before reading
+    # DISAPPEARING instead — the grace window a single dropout frame must
+    # not immediately erase persistence. A policy choice, not a physical
+    # constant, same discipline as every other threshold in this file.
+    persistence_max_dropout_frames: int = 1
+
+    # Consecutive absent frames after which a cell's tracked persistence
+    # state is fully, deterministically cleared (reverts to NO_EVIDENCE —
+    # never silently reinterpreted as FREE). Must exceed
+    # persistence_max_dropout_frames — expiration is a strictly later
+    # event than the dropout grace window, not the same boundary.
+    persistence_expiration_absence_frames: int = 5
+
     def resolved_obstacle_dead_zone_px(self) -> int:
         """obstacle_dead_zone_px if set, else num_disparities."""
         return (
@@ -206,4 +385,68 @@ class PipelineConfig:
                 "Require geometry_degraded_min_valid_fraction <= geometry_healthy_min_valid_fraction, got "
                 f"geometry_degraded_min_valid_fraction={self.geometry_degraded_min_valid_fraction}, "
                 f"geometry_healthy_min_valid_fraction={self.geometry_healthy_min_valid_fraction}."
+            )
+        if self.temporal_max_records < 1:
+            raise ValueError(
+                f"temporal_max_records ({self.temporal_max_records}) must be >= 1."
+            )
+        if not (self.temporal_max_age_s > 0.0):
+            raise ValueError(
+                f"temporal_max_age_s ({self.temporal_max_age_s}) must be > 0."
+            )
+        if not (self.temporal_gap_limit_s > 0.0):
+            raise ValueError(
+                f"temporal_gap_limit_s ({self.temporal_gap_limit_s}) must be > 0."
+            )
+        if self.temporal_consistency_sampling_stride < 1:
+            raise ValueError(
+                "temporal_consistency_sampling_stride "
+                f"({self.temporal_consistency_sampling_stride}) must be >= 1."
+            )
+        if not (self.temporal_consistency_agreement_tolerance_m >= 0.0):
+            raise ValueError(
+                "temporal_consistency_agreement_tolerance_m "
+                f"({self.temporal_consistency_agreement_tolerance_m}) must be >= 0."
+            )
+        if not (0.0 <= self.temporal_consistency_min_agreement_fraction <= 1.0):
+            raise ValueError(
+                "temporal_consistency_min_agreement_fraction "
+                f"({self.temporal_consistency_min_agreement_fraction}) must be in [0, 1]."
+            )
+        if not (0.0 <= self.temporal_stabilization_min_history_confidence <= 1.0):
+            raise ValueError(
+                "temporal_stabilization_min_history_confidence "
+                f"({self.temporal_stabilization_min_history_confidence}) must be in [0, 1]."
+            )
+        if not (0.0 <= self.temporal_stabilization_min_comparable_fraction <= 1.0):
+            raise ValueError(
+                "temporal_stabilization_min_comparable_fraction "
+                f"({self.temporal_stabilization_min_comparable_fraction}) must be in [0, 1]."
+            )
+        if not (self.reliability_max_angular_motion_rad > 0.0):
+            raise ValueError(
+                "reliability_max_angular_motion_rad "
+                f"({self.reliability_max_angular_motion_rad}) must be > 0."
+            )
+        if not (0.0 <= self.reliability_min_motion_coverage_fraction <= 1.0):
+            raise ValueError(
+                "reliability_min_motion_coverage_fraction "
+                f"({self.reliability_min_motion_coverage_fraction}) must be in [0, 1]."
+            )
+        if self.persistence_min_support_count < 2:
+            raise ValueError(
+                "persistence_min_support_count "
+                f"({self.persistence_min_support_count}) must be >= 2 — one "
+                "observation can never become PERSISTENT."
+            )
+        if self.persistence_max_dropout_frames < 0:
+            raise ValueError(
+                "persistence_max_dropout_frames "
+                f"({self.persistence_max_dropout_frames}) must be >= 0."
+            )
+        if not (self.persistence_expiration_absence_frames > self.persistence_max_dropout_frames):
+            raise ValueError(
+                "Require persistence_expiration_absence_frames > persistence_max_dropout_frames, got "
+                f"persistence_expiration_absence_frames={self.persistence_expiration_absence_frames}, "
+                f"persistence_max_dropout_frames={self.persistence_max_dropout_frames}."
             )

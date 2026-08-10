@@ -246,6 +246,63 @@ Live demo (left image, disparity, metric depth, BODY-frame top-down geometry —
 
 ![Level 3 live demo](docs/assets/10_level3_live_demo.gif)
 
+## Level 4: temporal perception (frozen)
+
+Beyond Level 3's single-frame geometry, `DepthPerceptionPipeline` can
+optionally track that geometry **across time**: a bounded recent history,
+frame-to-frame consistency, confidence-weighted stabilization, short-window
+rotational motion compensation, an explicit motion-aware reliability
+verdict, and deterministic per-cell persistence classification
+(NEW/PERSISTENT/DISAPPEARING). Every capability is opt-in (all flags
+default `False`) and purely additive to every Level 0-3 field — with
+Level 4 disabled, output is byte-identical to Level 3 alone.
+
+**What Level 4 includes:** temporal history (`result.temporal_admission_status`),
+temporal consistency (`result.temporal_consistency`), temporal stabilization
+(`result.temporal_stabilization`), rotation compensation
+(`result.rotation_compensation_status`), motion-aware reliability
+(`result.motion_aware_reliability`), and per-cell persistence classification
+(`result.temporal_persistence`). See
+[`docs/LEVEL4_CANONICAL_REFERENCE.md`](docs/LEVEL4_CANONICAL_REFERENCE.md)
+for the single authoritative, current reference (organized by concept, not
+build order) and
+[`docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`](docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md)
+for what remains unverified against real IMU/rotation hardware.
+
+**What Level 4 explicitly does NOT include:** VIO, SLAM, localization, a
+world map, planning, control, or any neural/learned component — see the
+canonical reference's own non-goals section.
+
+```python
+config = PipelineConfig(
+    enable_temporal=True, enable_temporal_stabilization=True,
+    enable_rotation_compensation=True, enable_motion_aware_reliability=True,
+    enable_temporal_persistence=True,
+)
+pipeline = DepthPerceptionPipeline(config, calibration, body_T_camera_left=body_T_camera_left)
+```
+
+A standalone live OpenCV dashboard (outside the core engine) drives the
+real stereo camera through the entire Level 4 chain continuously — raw
+depth, stabilized depth, and the persistence state grid side by side, with
+consistency/rotation-compensation/reliability/persistence telemetry
+overlaid. The IMU remains simulated: pressing `i` attaches a synthetic
+`MotionHint` to each subsequent frame, and the dashboard displays an
+unmistakable **"SIMULATED MOTIONHINT: ON — (NOT real IMU data)"** badge in
+red the entire time it's active, so simulated motion input is never
+confused with a real sensor reading:
+
+```bash
+python examples/visualize_level4_live.py            # q/ESC quit, r reset, i toggle simulated MotionHint
+```
+
+Live demo (real camera, full Level 4 chain — the persistence grid turns
+green as evidence repeats and is classified PERSISTENT; the SIMULATED
+MotionHint badge appears partway through, exactly when it was toggled on;
+reproduce with `python examples/generate_level4_live_gif.py`):
+
+![Level 4 live demo](docs/assets/11_level4_live_demo.gif)
+
 ## Pipeline
 
 ```
@@ -315,6 +372,10 @@ Everything here is a *consumer* of the library, never a dependency of it:
 |---|---|
 | `live_demo.py` | Real USB stereo camera, `cv2.imshow` (full `opencv-python`, not headless — see `pyproject.toml`'s comment on this) |
 | `synthetic_demo.py` | Nothing — synthetic NumPy arrays, no camera, no GUI |
+| `visualize_level3.py` | `pip install -e ".[viz]"` (matplotlib); `--live` needs a real camera, or pass saved `.npy` frames |
+| `generate_demo_gif.py` | Real camera — captures `docs/assets/10_level3_live_demo.gif` |
+| `visualize_level4_live.py` | Real USB stereo camera, `cv2.imshow` (full `opencv-python`, not headless) — live OpenCV dashboard for the full Level 4 temporal chain; IMU stays simulated (`docs/LEVEL4_SIMULATED_IMU.md`) |
+| `generate_level4_live_gif.py` | Real camera — captures `docs/assets/11_level4_live_demo.gif`, reusing `visualize_level4_live.py`'s own camera/rendering code directly |
 | `navigation/velocity_planner.py` | Converts obstacle beam data into forward speed / yaw rate — flight-command generation, downstream of and out of scope for the perception library itself |
 | `visualization/overlay_renderer.py` | `cv2` drawing for `live_demo.py`'s on-screen display |
 | `telemetry/run_logger.py` | Disk-based per-run logging (`runs/<timestamp>/`) for desk-test sessions |
@@ -338,6 +399,21 @@ obstacle distances look wrong (e.g. picking up a laptop webcam instead of
 the stereo rig). Controls while running: `q` to quit, `d` to toggle the
 disparity view, `g` to toggle the traversability grid overlay. Each run
 logs config, system info, and per-frame telemetry to `runs/<timestamp>/`.
+
+```bash
+# Level 4 live dashboard — real camera, full temporal chain, on-screen:
+pip uninstall opencv-python-headless && pip install opencv-python
+python examples/visualize_level4_live.py
+python examples/visualize_level4_live.py --camera-index 1 --simulate-motion-hint
+```
+
+`visualize_level4_live.py` reuses `live_demo.py`'s camera-opening approach
+and `visualize_level3.py`'s capture geometry/BODY extrinsic directly (no
+competing camera abstraction). Controls: `q`/ESC to quit, `r` to call
+`DepthPerceptionPipeline.reset()`, `i` to toggle a simulated `MotionHint`
+(clearly badged on-screen — see the Level 4 section above). It reads only
+public `DepthPerceptionResult` fields and reimplements no Level 4 algorithm
+itself.
 
 ## Testing
 
@@ -377,6 +453,15 @@ scope — see [`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md).
 IMU, VIO/SLAM, lidar fusion, and the rover stack are planned but not yet
 implemented — see the status table in `docs/report.html` for the full
 breakdown.
+
+Level 3 (single-frame 3D geometry) and Level 4 (temporal perception —
+history, consistency, stabilization, rotation compensation, reliability,
+persistence) are both implemented and frozen in software — see
+[`docs/LEVEL4_CANONICAL_REFERENCE.md`](docs/LEVEL4_CANONICAL_REFERENCE.md).
+Level 4's live dashboard has been run against the real stereo camera (see
+the GIF above); real IMU/measured-rotation/Jetson validation remains
+explicitly pending — see
+[`docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`](docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md).
 
 ## License
 

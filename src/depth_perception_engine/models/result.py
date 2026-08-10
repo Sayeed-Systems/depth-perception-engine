@@ -7,12 +7,19 @@ DepthPerceptionPipeline.process()) returns one of these, never a bare dict.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
 from depth_perception_engine.calibration.models import StereoCalibration
 from depth_perception_engine.geometry.types import FreeSpaceRays, GeometryMetrics, ObstacleCloud, PointCloud
+from depth_perception_engine.temporal.types import (
+    MotionAwareReliability,
+    MotionHint,
+    TemporalConsistency,
+    TemporalPersistence,
+    TemporalStabilization,
+)
 from depth_perception_engine.traversability.types import NavigationDecision, RegionStats
 
 
@@ -40,6 +47,32 @@ class StereoObservation:
     per-observation calibration (e.g. a multi-camera fusion producer
     selecting between rigs) has somewhere to put it without a public API
     change — see docs/LEVEL3_PUBLIC_API.md.
+
+    motion_hint: an optional temporal.MotionHint (a short-duration
+    rotational motion measurement) a caller may attach to this specific
+    stereo capture. Reserved at Level 4, Phase E1 (not yet consumed then);
+    as of Phase E2, DepthPerceptionPipeline.process_observation() forwards
+    this straight through to process()'s own motion_hint parameter, which
+    associates it with the frame's temporal.TemporalRecord if
+    PipelineConfig.enable_temporal is True — pure bookkeeping association,
+    still no integration/alignment/algorithm reads its contents (see
+    docs/E2_TEMPORAL_HISTORY_PLAN.md). None (the default) means "no motion
+    hint was supplied for this frame" — legal and unremarkable: a missing
+    motion hint never blocks temporal-history admission or Level 3
+    perception (see docs/LEVEL4_ARCHITECTURE.md's degradation semantics).
+
+    motion_hints (Level 4, Phase E5): an optional, bounded SEQUENCE of
+    temporal.MotionHint samples spanning the interval leading up to this
+    capture — distinct from the singular `motion_hint` field above, which
+    remains for TemporalRecord association only (E1-E4, untouched).
+    Forwarded by process_observation() into process()'s own motion_hints
+    parameter, which DepthPerceptionPipeline.process() uses (only when
+    PipelineConfig.enable_rotation_compensation is True) to integrate a
+    short-window relative rotation and compensate the previous comparable
+    frame's geometry before E3/E4 run — see
+    docs/LEVEL4_E5_IMPLEMENTATION_PLAN.md. None/empty (the default) means
+    "no motion samples for this interval" — legal and unremarkable: E5
+    falls back cleanly, never blocking Level 3/4 perception.
     """
     left_image: np.ndarray
     right_image: np.ndarray
@@ -47,6 +80,8 @@ class StereoObservation:
     right_timestamp: Optional[float] = None
     calibration: Optional[StereoCalibration] = None
     frame_id: Optional[str] = None
+    motion_hint: Optional[MotionHint] = None
+    motion_hints: Optional[Sequence[MotionHint]] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +183,94 @@ class DepthPerceptionResult:
     field-set mismatches (no timestamp on ObstacleCloud/FreeSpaceRays; no
     max-distance/count fields on GeometryMetrics) reported rather than
     silently resolved by adding fields to those frozen types.
+
+    temporal_admission_status (Level 4, Phase E2): None unless
+    PipelineConfig.enable_temporal is True (default False — see
+    docs/E2_TEMPORAL_HISTORY_PLAN.md). When present, one of
+    temporal.TemporalAdmissionStatus's plain string constants, reporting
+    whether this frame's own timestamp was admitted into the pipeline's
+    internal temporal.TemporalHistory buffer (ACCEPTED/
+    ACCEPTED_NEW_SEQUENCE) or rejected for chronology reasons
+    (REJECTED_INVALID_TIMESTAMP/REJECTED_OLDER_TIMESTAMP/
+    REJECTED_DUPLICATE_TIMESTAMP) — never a reinterpretation of this
+    frame's own disparity/depth/geometry/obstacle evidence, all of which
+    are completely unaffected by temporal-history admission either way.
+    Pure metadata about chronology bookkeeping, not a "temporal result" —
+    see docs/LEVEL4_ARCHITECTURE.md section 9's raw-vs-temporal authority
+    rule.
+
+    temporal_consistency (Level 4, Phase E3): None unless
+    PipelineConfig.enable_temporal is True, and even then None on a frame
+    whose own timestamp was rejected by temporal chronology (see
+    temporal_admission_status above) or when no comparable prior frame
+    exists yet (first frame, first after reset(), or the first frame of a
+    gap-triggered new sequence — see docs/E3_IMPLEMENTATION_PLAN.md's
+    Decision 2). When present, a temporal.TemporalConsistency reporting
+    whether this frame's depth_map agrees with the single most recent
+    comparable prior frame's — READ-ONLY: computing this never rewrites
+    depth_map, geometry, geometry_body, obstacle_cloud, free_space_rays,
+    or any other field on this same result, under any outcome (including
+    CONTRADICTORY) — see docs/E3_IMPLEMENTATION_PLAN.md's Decision 4.
+
+    temporal_stabilization (Level 4, Phase E4): None unless BOTH
+    PipelineConfig.enable_temporal and
+    PipelineConfig.enable_temporal_stabilization are True, and even then
+    None (INSUFFICIENT_EVIDENCE state, to be precise — see
+    temporal.TemporalStabilization's own docstring) whenever
+    temporal_consistency itself is None/not-comparable/not-confident-
+    enough this frame. When present, a temporal.TemporalStabilization —
+    a deterministic, confidence-weighted blend of this frame's own depth
+    with the single most recent comparable prior frame's, ADDITIVE
+    alongside (never a replacement of) depth_map/geometry/geometry_body
+    above, all of which remain byte-identical whether or not this field
+    is populated. See docs/E4_IMPLEMENTATION_PLAN.md.
+
+    rotation_compensation_status (Level 4, Phase E5): None unless BOTH
+    PipelineConfig.enable_temporal and
+    PipelineConfig.enable_rotation_compensation are True. When present,
+    one of temporal.RotationCompensationStatus's two plain string
+    constants (APPLIED/NOT_APPLIED) — reports whether a short-window
+    relative rotation was successfully integrated from this call's
+    motion_hints and used to re-express the previous comparable frame's
+    geometry before temporal_consistency/temporal_stabilization were
+    computed. The relative rotation itself is never exposed here (see
+    docs/LEVEL4_E5_IMPLEMENTATION_PLAN.md's Decision 4) — this is a
+    pass/fail marker only. Never affects disparity_map/depth_map/geometry/
+    etc. above, all of which remain byte-identical regardless.
+
+    motion_aware_reliability (Level 4, Phase E6): None unless BOTH
+    PipelineConfig.enable_temporal and
+    PipelineConfig.enable_motion_aware_reliability are True. When present,
+    a temporal.MotionAwareReliability — a deterministic, EXPLICIT (never
+    one opaque blended score) assessment of whether temporal_consistency/
+    temporal_stabilization remain trustworthy given this frame's motion
+    conditions and rotation_compensation_status. Computed regardless of
+    whether E3 actually ran this frame (a chronology-rejected frame is
+    still classified, as INSUFFICIENT_EVIDENCE) — but purely read-only of
+    every other field on this result: computing it never modifies
+    disparity_map, depth_map, any geometry.* field,
+    temporal_consistency, temporal_stabilization, or
+    rotation_compensation_status, all of which remain byte-identical
+    whether or not this field is populated. See
+    docs/LEVEL4_E6_IMPLEMENTATION_PLAN.md.
+
+    temporal_persistence (Level 4, Phase E7): None unless ALL THREE of
+    PipelineConfig.enable_temporal, enable_motion_aware_reliability, and
+    enable_temporal_persistence are True. When present, a
+    temporal.TemporalPersistence — a deterministic, per-cell
+    classification (NEW/PERSISTENT/DISAPPEARING, plus a frame-level
+    CLASSIFIED/UNRELIABLE/INSUFFICIENT_EVIDENCE gate state) of geometric
+    evidence across time, requiring repeated chronological support and
+    never fabricating free space from history (UNKNOWN stays UNKNOWN —
+    see temporal.TemporalPersistence's own docstring). Computed by a
+    small, bounded, stateful collaborator
+    (temporal.persistence.TemporalPersistenceTracker) the pipeline owns —
+    purely read-only of every other field on this result: computing it
+    never modifies disparity_map, depth_map, any geometry.* field,
+    temporal_consistency, temporal_stabilization,
+    rotation_compensation_status, or motion_aware_reliability, all of
+    which remain byte-identical whether or not this field is populated.
+    See docs/LEVEL4_E7_IMPLEMENTATION_PLAN.md.
     """
     disparity_map: np.ndarray
     depth_map: np.ndarray
@@ -163,6 +286,12 @@ class DepthPerceptionResult:
     obstacle_cloud: Optional[ObstacleCloud] = None
     free_space_rays: Optional[FreeSpaceRays] = None
     geometry_metrics: Optional[GeometryMetrics] = None
+    temporal_admission_status: Optional[str] = None
+    temporal_consistency: Optional[TemporalConsistency] = None
+    temporal_stabilization: Optional[TemporalStabilization] = None
+    rotation_compensation_status: Optional[str] = None
+    motion_aware_reliability: Optional[MotionAwareReliability] = None
+    temporal_persistence: Optional[TemporalPersistence] = None
 
 
 @dataclass(frozen=True, slots=True)

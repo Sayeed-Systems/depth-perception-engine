@@ -14,8 +14,9 @@ Usage:
 
 Every engine (DisparityEngine, RectificationEngine, ThreatAssessor, and —
 Level 3, Phase E3, when PipelineConfig.enable_geometry is True —
-PointCloudBuilder) is built ONCE in __init__ and reused across process()
-calls — mirroring the
+PointCloudBuilder; Level 4, Phase E2, when PipelineConfig.enable_temporal
+is True — temporal.TemporalHistory) is built ONCE in __init__ and reused
+across process() calls — mirroring the
 original standalone main.py's build_pipeline(), and critically preserving
 obstacles.ThreatAssessor's per-beam EMA smoothing and status debouncing
 across frames. This is the entry point mp01_perception's
@@ -26,7 +27,7 @@ docs/INTEGRATION_READINESS.md.
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 import cv2
 import numpy as np
@@ -36,9 +37,13 @@ from depth_perception_engine.calibration.models import StereoCalibration
 from depth_perception_engine.config.pipeline_config import PipelineConfig
 from depth_perception_engine.depth.depth_estimator import DepthEstimator
 from depth_perception_engine.frames import FrameId, RigidTransform
-from depth_perception_engine.fusion.result_builder import build_result, to_obstacle_assessment
+from depth_perception_engine.fusion.result_builder import (
+    aggregate_confidence,
+    build_result,
+    to_obstacle_assessment,
+)
 from depth_perception_engine.geometry.free_space import build_free_space_rays
-from depth_perception_engine.geometry.geometry_metrics import build_geometry_metrics
+from depth_perception_engine.geometry.geometry_metrics import build_geometry_metrics, classify_geometry_quality
 from depth_perception_engine.geometry.obstacle_extractor import build_obstacle_cloud
 from depth_perception_engine.geometry.point_cloud_builder import PointCloudBuilder
 from depth_perception_engine.geometry.rigid_transform import transform_point_cloud
@@ -51,6 +56,13 @@ from depth_perception_engine.models.result import (
 from depth_perception_engine.obstacles.threat_assessment import ThreatAssessor
 from depth_perception_engine.stereo.disparity_engine import DisparityEngine
 from depth_perception_engine.stereo.rectification import RectificationEngine
+from depth_perception_engine.temporal.consistency import compute_temporal_consistency
+from depth_perception_engine.temporal.history import TemporalAdmissionStatus, TemporalHistory
+from depth_perception_engine.temporal.persistence import TemporalPersistenceTracker
+from depth_perception_engine.temporal.reliability import compute_motion_aware_reliability
+from depth_perception_engine.temporal.rotation_compensation import compute_rotation_compensation
+from depth_perception_engine.temporal.stabilization import compute_temporal_stabilization
+from depth_perception_engine.temporal.types import MotionHint, TemporalRecord
 from depth_perception_engine.traversability.scene_interpreter import SceneInterpreter
 from depth_perception_engine.utils.validation import require_matching_stereo_pair
 
@@ -126,6 +138,52 @@ class DepthPerceptionPipeline:
             clear_m=config.clear_distance_m,
             ambiguous_fraction_thresh=config.traversability_ambiguous_fraction_thresh,
         )
+        # Level 4, Phase E2: built once (same discipline as every other
+        # engine here), but only if temporal history is actually enabled —
+        # the disabled default must not pay even construction cost, and
+        # must accumulate zero temporal state. See
+        # docs/E2_TEMPORAL_HISTORY_PLAN.md.
+        self._temporal_history: Optional[TemporalHistory] = (
+            TemporalHistory(
+                max_records=config.temporal_max_records,
+                max_age_s=config.temporal_max_age_s,
+                gap_limit_s=config.temporal_gap_limit_s,
+            )
+            if config.enable_temporal
+            else None
+        )
+        # Level 4, Phase E7: bounded per-cell persistence tracker, built
+        # once (same discipline as every other engine here), but only
+        # when persistence classification is actually enabled — nested
+        # underneath enable_temporal AND enable_motion_aware_reliability
+        # (E7 requires E6's own reliability verdict to gate whether a
+        # frame may create/reinforce persistence — see
+        # docs/LEVEL4_E7_IMPLEMENTATION_PLAN.md's Rule 7). Fixed, bounded
+        # per-cell state (four arrays, shape fixed on first update() call,
+        # never growing with frame count) — not a second, unbounded
+        # tracker and not a store of DepthPerceptionResult objects.
+        self._temporal_persistence_tracker: Optional[TemporalPersistenceTracker] = (
+            TemporalPersistenceTracker(
+                min_support_count=config.persistence_min_support_count,
+                max_dropout_frames=config.persistence_max_dropout_frames,
+                expiration_absence_frames=config.persistence_expiration_absence_frames,
+                agreement_tolerance_m=config.temporal_consistency_agreement_tolerance_m,
+            )
+            if (config.enable_temporal and config.enable_motion_aware_reliability and config.enable_temporal_persistence)
+            else None
+        )
+        # Level 4, Phase E5: rectified intrinsics for prior-geometry
+        # reprojection, derived once from the pipeline's own Q matrix —
+        # the exact same f/cx/cy derivation depth.DepthEstimator/
+        # calibration.contracts.StereoExtrinsics already use, not a new
+        # intrinsics representation. Cheap; computed unconditionally
+        # (not gated by enable_rotation_compensation) since it's just a
+        # few scalar reads, no meaningful construction cost — mirrors
+        # config/calibration properties already being unconditional.
+        Q = calibration.Q
+        self._rectified_focal_length_px: float = abs(float(Q[2, 3]))
+        self._rectified_principal_point_px = (-float(Q[0, 3]), -float(Q[1, 3]))
+
         # Holds per-beam EMA/debounce state across process() calls — this is
         # the whole reason DepthPerceptionPipeline exists as a persistent
         # object instead of a function.
@@ -193,6 +251,8 @@ class DepthPerceptionPipeline:
         right_image: np.ndarray,
         left_timestamp: Optional[float] = None,
         right_timestamp: Optional[float] = None,
+        motion_hint: Optional[MotionHint] = None,
+        motion_hints: Optional[Sequence[MotionHint]] = None,
     ) -> DepthPerceptionResult:
         """Run one stereo pair through the full pipeline.
 
@@ -206,6 +266,32 @@ class DepthPerceptionPipeline:
                 given). This library performs no synchronization or skew
                 checking on them — purely a pass-through convenience so a
                 caller doesn't have to track timestamps out-of-band.
+            motion_hint: Level 4, Phase E2. Optional temporal.MotionHint
+                associated with this frame — new, additive, defaulted
+                parameter; every existing call site is unaffected. Has no
+                effect on any Level 3 output whatsoever. Only consumed
+                when config.enable_temporal is True, in which case it is
+                attached unread to this frame's temporal.TemporalRecord
+                (no integration, alignment, or validation of its contents
+                beyond MotionHint.__post_init__'s own checks) — see
+                docs/E2_TEMPORAL_HISTORY_PLAN.md. A missing motion hint
+                (None, the default) is always legal and never blocks
+                temporal-history admission or Level 3 perception.
+            motion_hints: Level 4, Phase E5. Optional, bounded sequence of
+                temporal.MotionHint samples spanning the interval leading
+                up to this frame — distinct from the singular `motion_hint`
+                above, which remains for TemporalRecord association only.
+                Only consumed when config.enable_temporal and
+                config.enable_rotation_compensation are both True, in
+                which case admissible samples (see
+                docs/LEVEL4_E5_IMPLEMENTATION_PLAN.md's Decision 3) are
+                integrated into a short-window relative rotation used to
+                re-express the previous comparable frame's geometry before
+                temporal_consistency/temporal_stabilization are computed.
+                A missing/empty/insufficient sequence (None, the default)
+                is always legal and never blocks temporal-history
+                admission, consistency, stabilization, or Level 3
+                perception — E5 falls back to exactly pre-E5 behavior.
 
         Returns:
             A DepthPerceptionResult.
@@ -367,6 +453,244 @@ class DepthPerceptionPipeline:
             self._threat_assessor.assess(depth_map, raw_disparity)
         )
 
+        # Level 4, Phase E2: bounded temporal-history admission, gated by
+        # PipelineConfig.enable_temporal (self._temporal_history is None
+        # when disabled — see __init__). Deliberately the LAST thing
+        # computed before build_result(): every value it reads
+        # (traversability, geometry_metrics, result_timestamp,
+        # motion_hint) is already fully computed above, and admission
+        # itself never feeds back into or alters any of Level 3's own
+        # outputs — see docs/LEVEL4_ARCHITECTURE.md section 9's raw-vs-
+        # temporal authority rule. classify_geometry_quality() here is
+        # pure reuse of the already-frozen Level 3, Phase E6 classifier —
+        # not a new algorithm, and not itself a temporal computation (it
+        # never looks at history). temporal.TemporalHistory.admit() is
+        # the ONLY place any timestamp-chronology decision is made; no
+        # comparison logic is duplicated here.
+        temporal_admission_status = None
+        temporal_consistency = None
+        temporal_stabilization = None
+        rotation_compensation_status = None
+        motion_aware_reliability = None
+        temporal_persistence = None
+        if self._temporal_history is not None:
+            temporal_t0 = time.perf_counter()
+            geometry_quality = None
+            if geometry_metrics is not None:
+                geometry_quality = classify_geometry_quality(
+                    geometry_metrics,
+                    healthy_min_valid_fraction=self._config.geometry_healthy_min_valid_fraction,
+                    degraded_min_valid_fraction=self._config.geometry_degraded_min_valid_fraction,
+                )
+            # Level 4, Phase E3: decimated depth snapshot, the one piece
+            # of data compute_temporal_consistency() needs and nothing
+            # more (never the full-resolution depth_map, never a
+            # PointCloud) — see docs/E3_IMPLEMENTATION_PLAN.md's
+            # Decision 5. Reuses depth_map's own existing 0.0-is-invalid
+            # convention, so no second validity array is needed.
+            stride = self._config.temporal_consistency_sampling_stride
+            depth_snapshot_m = depth_map[::stride, ::stride]
+            # Captured BEFORE admit() — admission mutates the buffer
+            # (appends this frame's own record, and may clear everything
+            # on a gap restart), so this is genuinely "the previous
+            # frame's record," not a reference to something that might
+            # include the record we're about to add.
+            previous_latest = self._temporal_history.latest
+            record = TemporalRecord(
+                timestamp=result_timestamp,
+                confidence=aggregate_confidence(traversability),
+                geometry_quality=geometry_quality,
+                motion_hint=motion_hint,
+                depth_snapshot_m=depth_snapshot_m,
+            )
+            temporal_admission_status = self._temporal_history.admit(record)
+            logger.debug(
+                "Temporal admission stage: %.2f ms, status=%s, history size=%d",
+                (time.perf_counter() - temporal_t0) * 1000.0,
+                temporal_admission_status,
+                len(self._temporal_history),
+            )
+            # Level 4, Phase E7: a gap-triggered new sequence wipes
+            # TemporalHistory's own chronology (see admit() above) — the
+            # persistence tracker's per-cell state must start equally
+            # fresh, matching TemporalHistory's own "complete amnesia"
+            # behavior (docs/E2_TEMPORAL_HISTORY_PLAN.md's Decision 3/7)
+            # rather than incorrectly carrying pre-gap support counts
+            # into an unrelated new sequence.
+            if (
+                self._temporal_persistence_tracker is not None
+                and temporal_admission_status == TemporalAdmissionStatus.ACCEPTED_NEW_SEQUENCE
+            ):
+                self._temporal_persistence_tracker.clear()
+
+            # Level 4, Phase E3: read-only consistency check against the
+            # single most recent comparable prior record — see
+            # docs/E3_IMPLEMENTATION_PLAN.md's Decision 2 trigger table.
+            # Evaluated only when THIS frame's own timestamp was itself
+            # admitted (temporal_admission_status is ACCEPTED or
+            # ACCEPTED_NEW_SEQUENCE) — a chronology-rejected frame gets no
+            # comparison at all (temporal_consistency stays None;
+            # temporal_admission_status already explains why). On a
+            # gap-triggered new sequence, `previous_latest` (captured
+            # above, before admit() cleared the old history) is
+            # deliberately NOT passed through — the pre-gap record must
+            # never influence the new sequence's first consistency
+            # judgement (docs/E2_TEMPORAL_HISTORY_PLAN.md's Decision 7).
+            previous_for_comparison = (
+                previous_latest if temporal_admission_status == TemporalAdmissionStatus.ACCEPTED else None
+            )
+
+            if temporal_admission_status in (
+                TemporalAdmissionStatus.ACCEPTED, TemporalAdmissionStatus.ACCEPTED_NEW_SEQUENCE,
+            ):
+                # Level 4, Phase E5: short-window rotational motion
+                # compensation, strictly upstream of E3/E4
+                # (docs/LEVEL4_E5_IMPLEMENTATION_PLAN.md's Decision 5) —
+                # substitutes previous_for_comparison with a rotation-
+                # compensated copy (or leaves it unchanged on any
+                # fallback condition) before compute_temporal_consistency
+                # runs; neither that function nor
+                # compute_temporal_stabilization is modified by this
+                # stage. Gated independently of enable_temporal_
+                # stabilization — E5 can usefully feed an E3-only
+                # (consistency-only) consumer too.
+                if self._config.enable_rotation_compensation:
+                    rotation_t0 = time.perf_counter()
+                    previous_timestamp_for_compensation = (
+                        previous_for_comparison.timestamp if previous_for_comparison is not None else None
+                    )
+                    previous_for_comparison, rotation_compensation_status = compute_rotation_compensation(
+                        previous_for_comparison, motion_hints,
+                        previous_timestamp=previous_timestamp_for_compensation,
+                        current_timestamp=result_timestamp,
+                        stride=stride,
+                        focal_length_px=self._rectified_focal_length_px,
+                        principal_point_px=self._rectified_principal_point_px,
+                    )
+                    logger.debug(
+                        "Rotation compensation stage: %.2f ms, status=%s",
+                        (time.perf_counter() - rotation_t0) * 1000.0,
+                        rotation_compensation_status,
+                    )
+
+                consistency_t0 = time.perf_counter()
+                temporal_consistency = compute_temporal_consistency(
+                    depth_snapshot_m, previous_for_comparison,
+                    agreement_tolerance_m=self._config.temporal_consistency_agreement_tolerance_m,
+                    min_agreement_fraction=self._config.temporal_consistency_min_agreement_fraction,
+                )
+                logger.debug(
+                    "Temporal consistency stage: %.2f ms, state=%s",
+                    (time.perf_counter() - consistency_t0) * 1000.0,
+                    temporal_consistency.state,
+                )
+
+                # Level 4, Phase E4: deterministic, confidence-aware
+                # stabilization, gated underneath enable_temporal_
+                # stabilization (mirrors enable_obstacle_geometry/
+                # enable_free_space_rays's own precedent of an
+                # opt-in flag nested under a broader one — see
+                # docs/E4_IMPLEMENTATION_PLAN.md's Decision 2/6).
+                # Reuses depth_snapshot_m and previous_for_comparison
+                # exactly as E3 computed them above — no second
+                # decimation, no second "which prior record" decision.
+                # Read-only of every Level 3 field: the function below
+                # receives only two small arrays, one scalar
+                # (previous_record.confidence), and this frame's own
+                # already-computed TemporalConsistency — never a
+                # mutable reference to depth_map/geometry/etc. — see
+                # docs/E4_IMPLEMENTATION_PLAN.md's Decision 1/3.
+                if self._config.enable_temporal_stabilization:
+                    stabilization_t0 = time.perf_counter()
+                    temporal_stabilization = compute_temporal_stabilization(
+                        depth_snapshot_m, previous_for_comparison, temporal_consistency,
+                        agreement_tolerance_m=self._config.temporal_consistency_agreement_tolerance_m,
+                        min_history_confidence=self._config.temporal_stabilization_min_history_confidence,
+                        min_comparable_fraction=self._config.temporal_stabilization_min_comparable_fraction,
+                    )
+                    logger.debug(
+                        "Temporal stabilization stage: %.2f ms, state=%s",
+                        (time.perf_counter() - stabilization_t0) * 1000.0,
+                        temporal_stabilization.state,
+                    )
+
+            # Level 4, Phase E6: deterministic, explicit motion-aware
+            # reliability assessment — deliberately OUTSIDE the narrower
+            # "admitted this frame" block above (unlike E3/E4/E5), so a
+            # chronology-rejected frame is still correctly classified
+            # INSUFFICIENT_EVIDENCE rather than silently skipped — see
+            # docs/LEVEL4_E6_IMPLEMENTATION_PLAN.md's "Where E6 runs"
+            # section. Read-only of every value it reads: it never
+            # mutates temporal_consistency/temporal_stabilization/
+            # rotation_compensation_status, never calls
+            # compensate_prior_geometry() (no additional motion
+            # compensation), and never touches disparity_map/depth_map/
+            # any geometry.* field. previous_for_comparison's own
+            # timestamp (None on a rejected/first/gap-restart frame) is
+            # exactly the "no comparison interval" signal
+            # select_motion_hint_samples() already knows how to handle.
+            if self._config.enable_motion_aware_reliability:
+                reliability_t0 = time.perf_counter()
+                previous_timestamp_for_reliability = (
+                    previous_for_comparison.timestamp if previous_for_comparison is not None else None
+                )
+                temporal_consistency_state = temporal_consistency.state if temporal_consistency is not None else None
+                temporal_stabilization_state = (
+                    temporal_stabilization.state if temporal_stabilization is not None else None
+                )
+                motion_aware_reliability = compute_motion_aware_reliability(
+                    temporal_consistency_state, temporal_stabilization_state, rotation_compensation_status,
+                    motion_hints,
+                    previous_timestamp=previous_timestamp_for_reliability,
+                    current_timestamp=result_timestamp,
+                    max_angular_motion_rad=self._config.reliability_max_angular_motion_rad,
+                    min_motion_coverage_fraction=self._config.reliability_min_motion_coverage_fraction,
+                )
+                logger.debug(
+                    "Motion-aware reliability stage: %.2f ms, state=%s",
+                    (time.perf_counter() - reliability_t0) * 1000.0,
+                    motion_aware_reliability.state,
+                )
+
+            # Level 4, Phase E7: deterministic, per-cell temporal-
+            # persistence classification — the LAST temporal stage,
+            # deliberately downstream of E6: it reads
+            # motion_aware_reliability.state (an UNRELIABLE frame must
+            # never create or reinforce persistence, Rule 7) and reuses
+            # this frame's own already-computed depth_snapshot_m/
+            # motion_hints exactly as E3/E5 already do — no second
+            # decimation, no re-derivation of reliability. Requires ALL
+            # of enable_temporal/enable_motion_aware_reliability/
+            # enable_temporal_persistence (self._temporal_persistence_tracker
+            # is None otherwise — see __init__), so this block is a pure
+            # no-op (zero added cost) for every caller that has not
+            # explicitly opted into all three. result_timestamp must be
+            # a real value: with none, no chronology can be established
+            # for this frame at all (mirrors TemporalHistory.admit()'s
+            # own REJECTED_INVALID_TIMESTAMP outcome), so persistence is
+            # simply not evaluated rather than guessing.
+            if self._temporal_persistence_tracker is not None and result_timestamp is not None:
+                persistence_t0 = time.perf_counter()
+                motion_aware_reliability_state = (
+                    motion_aware_reliability.state if motion_aware_reliability is not None else None
+                )
+                temporal_persistence = self._temporal_persistence_tracker.update(
+                    depth_snapshot_m, result_timestamp,
+                    motion_aware_reliability_state, motion_hints,
+                    enable_rotation_compensation=self._config.enable_rotation_compensation,
+                    stride=stride,
+                    focal_length_px=self._rectified_focal_length_px,
+                    principal_point_px=self._rectified_principal_point_px,
+                )
+                logger.debug(
+                    "Temporal persistence stage: %.2f ms, state=%s, new=%d, persistent=%d, disappearing=%d",
+                    (time.perf_counter() - persistence_t0) * 1000.0,
+                    temporal_persistence.state,
+                    temporal_persistence.new_count,
+                    temporal_persistence.persistent_count,
+                    temporal_persistence.disappearing_count,
+                )
+
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         result = build_result(
             raw_disparity, depth_map, traversability, obstacles, elapsed_ms,
@@ -376,6 +700,12 @@ class DepthPerceptionPipeline:
             obstacle_cloud=obstacle_cloud,
             free_space_rays=free_space_rays,
             geometry_metrics=geometry_metrics,
+            temporal_admission_status=temporal_admission_status,
+            temporal_consistency=temporal_consistency,
+            temporal_stabilization=temporal_stabilization,
+            rotation_compensation_status=rotation_compensation_status,
+            motion_aware_reliability=motion_aware_reliability,
+            temporal_persistence=temporal_persistence,
         )
 
         self._frames_processed += 1
@@ -390,30 +720,55 @@ class DepthPerceptionPipeline:
 
         Equivalent to
         ``process(observation.left_image, observation.right_image,
-        observation.left_timestamp, observation.right_timestamp)`` — provided
-        for callers that prefer passing one value instead of four.
+        observation.left_timestamp, observation.right_timestamp,
+        observation.motion_hint, observation.motion_hints)`` — provided
+        for callers that prefer passing one value instead of six.
+
+        Level 4, Phase E2: observation.motion_hint is now forwarded (was
+        reserved/unconsumed at Phase E1) — see process()'s own motion_hint
+        docstring for exactly what happens to it. Level 4, Phase E5:
+        observation.motion_hints is now forwarded too — see process()'s
+        own motion_hints docstring.
         """
         return self.process(
             observation.left_image,
             observation.right_image,
             left_timestamp=observation.left_timestamp,
             right_timestamp=observation.right_timestamp,
+            motion_hint=observation.motion_hint,
+            motion_hints=observation.motion_hints,
         )
 
     # ------------------------------------------------------------------
     def reset(self) -> None:
         """Clear all cross-frame state and start over.
 
-        Only ThreatAssessor carries cross-frame state (per-beam EMA/debounce
-        — see __init__) — this rebuilds it fresh from the same config, so a
+        ThreatAssessor carries cross-frame state (per-beam EMA/debounce —
+        see __init__) — this rebuilds it fresh from the same config, so a
         long stereo dropout or a scene cut doesn't leave stale smoothed
-        readings influencing the next several frames. Does not affect
-        calibration, config, or rectification maps. Raises RuntimeError if
-        called after close(), matching process()'s own post-close behavior.
+        readings influencing the next several frames. Level 4, Phase E2:
+        if temporal history is enabled, this also clears it completely
+        (temporal.TemporalHistory.clear()) — reset() provides complete
+        temporal amnesia, per docs/E2_TEMPORAL_HISTORY_PLAN.md's Decision
+        3/11: the next accepted frame after reset() behaves as the first
+        frame of a brand-new temporal sequence, with zero historical
+        influence. Level 4, Phase E7: if persistence classification is
+        enabled, this also clears the persistence tracker completely
+        (temporal.persistence.TemporalPersistenceTracker.clear()) — every
+        cell's support count/absence streak/first-observed timestamp is
+        discarded, so the next frame after reset() starts as a brand-new
+        persistence sequence too (Rule: reset clears persistence state).
+        Does not affect calibration, config, or rectification maps.
+        Raises RuntimeError if called after close(), matching process()'s
+        own post-close behavior.
         """
         if self._closed:
             raise RuntimeError("DepthPerceptionPipeline.reset() called after close().")
         self._threat_assessor = self._build_threat_assessor()
+        if self._temporal_history is not None:
+            self._temporal_history.clear()
+        if self._temporal_persistence_tracker is not None:
+            self._temporal_persistence_tracker.clear()
         self._frames_processed = 0
         self._last_confidence = None
         self._last_processing_time_ms = None
@@ -454,6 +809,15 @@ class DepthPerceptionPipeline:
     @property
     def calibration(self) -> StereoCalibration:
         return self._calibration
+
+    @property
+    def temporal_history(self) -> Optional[TemporalHistory]:
+        """Level 4, Phase E2. The pipeline's own temporal.TemporalHistory
+        instance, or None if PipelineConfig.enable_temporal is False (the
+        default) — mirrors .config/.calibration's read-only exposure
+        pattern. Query its .records/.latest/__len__ to inspect current
+        chronology; admission/clearing happen only via process()/reset()."""
+        return self._temporal_history
 
     def __repr__(self) -> str:
         return (

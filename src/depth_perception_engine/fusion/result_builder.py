@@ -23,6 +23,12 @@ from depth_perception_engine.models.result import (
     ObstacleAssessment,
     TraversabilityResult,
 )
+from depth_perception_engine.temporal.types import (
+    MotionAwareReliability,
+    TemporalConsistency,
+    TemporalPersistence,
+    TemporalStabilization,
+)
 
 
 def to_obstacle_assessment(raw: dict) -> ObstacleAssessment:
@@ -52,6 +58,12 @@ def build_result(
     obstacle_cloud: Optional[ObstacleCloud] = None,
     free_space_rays: Optional[FreeSpaceRays] = None,
     geometry_metrics: Optional[GeometryMetrics] = None,
+    temporal_admission_status: Optional[str] = None,
+    temporal_consistency: Optional[TemporalConsistency] = None,
+    temporal_stabilization: Optional[TemporalStabilization] = None,
+    rotation_compensation_status: Optional[str] = None,
+    motion_aware_reliability: Optional[MotionAwareReliability] = None,
+    temporal_persistence: Optional[TemporalPersistence] = None,
 ) -> DepthPerceptionResult:
     """Assemble the final structured pipeline output.
 
@@ -71,6 +83,21 @@ def build_result(
     timestamp's pass-through-or-None convention above, so every existing
     call site (including pipeline.api's process_stereo_pair, which never
     passes any of them) is unaffected.
+
+    temporal_admission_status (Level 4, Phase E2) / temporal_consistency
+    (Level 4, Phase E3) / temporal_stabilization (Level 4, Phase E4) /
+    rotation_compensation_status (Level 4, Phase E5) /
+    motion_aware_reliability (Level 4, Phase E6) / temporal_persistence
+    (Level 4, Phase E7): pass-through only, same discipline as
+    geometry/geometry_body/etc. above — this function does not compute
+    any of them (that's temporal.TemporalHistory.admit() /
+    temporal.compute_temporal_consistency() /
+    temporal.compute_temporal_stabilization() /
+    temporal.compute_rotation_compensation() /
+    temporal.compute_motion_aware_reliability() /
+    temporal.persistence.TemporalPersistenceTracker.update(), all called
+    by the pipeline before this function runs). All default to None, so
+    every pre-E2/E3/E4/E5/E6/E7 call site is unaffected.
     """
     return DepthPerceptionResult(
         disparity_map=disparity_map,
@@ -87,4 +114,10 @@ def build_result(
         obstacle_cloud=obstacle_cloud,
         free_space_rays=free_space_rays,
         geometry_metrics=geometry_metrics,
+        temporal_admission_status=temporal_admission_status,
+        temporal_consistency=temporal_consistency,
+        temporal_stabilization=temporal_stabilization,
+        rotation_compensation_status=rotation_compensation_status,
+        motion_aware_reliability=motion_aware_reliability,
+        temporal_persistence=temporal_persistence,
     )
