@@ -4,9 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depth-perception-engine"
-version = "1.0.0"
+version = "1.0.1"
 description = "Standalone, ROS-free stereo depth / traversability / obstacle perception library."
 readme = "README.md"
+# Deliberately the TOML-table form, not the newer SPDX-string form
+# (`license = "MIT"`): tested directly (Phase D17) against setuptools
+# 70/79/80.9/84 — the table form builds correctly on all four (a bare
+# deprecation warning on 79+, silent success on 70), while the string form
+# HARD-ERRORS on setuptools 70 ("`project.license` must be valid exactly by
+# one definition (2 matches found)") — a real, proven regression on exactly
+# the older-setuptools range a `setuptools<80`-constrained build environment
+# (e.g. colcon) could resolve to. Do not "modernize" this to the string form
+# without re-verifying against the actual minimum setuptools this project
+# needs to support — see docs/DPE_V1_PROVIDER_CONTRACT.md's D17 record.
 license = { text = "MIT" }
 requires-python = ">=3.9"
 authors = [

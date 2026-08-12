@@ -68,7 +68,7 @@ DPE performs no ROS/topic/node logic, no camera/IMU driver or device-path handli
 
 ## Version
 
-Current package version: `0.1.0` (pre-1.0, per `docs/PUBLIC_API.md`'s own documented SemVer policy — "a breaking change to a Tier 1/2 symbol... requires a major version bump (post-1.0)... pre-1.0, where breaking changes are still expected occasionally"). With the D9-D16 freeze complete — `GeometryFrame`'s type graph fully public, the input/execution/output contract stable and hardened, packaging/reproducibility validated — DPE has reached exactly the point that policy anticipates for a first stable release. See `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D16 record for the specific version recommendation and rationale; this file intentionally does not restate a number that hasn't been applied to the repository yet.
+Current package version: `1.0.1` — the D16 freeze was released as `1.0.0`; `1.0.1` is a packaging-only patch (Phase D17) fixing an external-install defect (a missing `setup.py` legacy-build-path fallback caused some non-PEP-517-isolated build paths to produce `UNKNOWN` package metadata instead of `depth-perception-engine`). No algorithm, `GeometryFrame` contract, or evidence-semantics change is included in `1.0.1` — see `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D16 (freeze rationale) and D17 (packaging repair) records.
 
 ## What's next
 
