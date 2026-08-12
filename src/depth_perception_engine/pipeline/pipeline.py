@@ -25,6 +25,7 @@ e.g. in its own __init__) and call .process() on every frame — see
 docs/INTEGRATION_READINESS.md.
 """
 
+import dataclasses
 import logging
 import time
 from typing import Optional, Sequence
@@ -39,14 +40,18 @@ from depth_perception_engine.depth.depth_estimator import DepthEstimator
 from depth_perception_engine.frames import FrameId, RigidTransform
 from depth_perception_engine.fusion.result_builder import (
     aggregate_confidence,
+    build_geometry_frame,
     build_result,
     to_obstacle_assessment,
 )
+from depth_perception_engine.geometry.boundary import build_boundary_evidence
 from depth_perception_engine.geometry.free_space import build_free_space_rays
 from depth_perception_engine.geometry.geometry_metrics import build_geometry_metrics, classify_geometry_quality
 from depth_perception_engine.geometry.obstacle_extractor import build_obstacle_cloud
+from depth_perception_engine.geometry.opening import build_opening_evidence
 from depth_perception_engine.geometry.point_cloud_builder import PointCloudBuilder
 from depth_perception_engine.geometry.rigid_transform import transform_point_cloud
+from depth_perception_engine.geometry.surface import build_surface_evidence
 from depth_perception_engine.models.result import (
     DepthPerceptionResult,
     PipelineHealth,
@@ -413,6 +418,7 @@ class DepthPerceptionPipeline:
         obstacle_cloud = None
         free_space_rays = None
         geometry_metrics = None
+        surface_evidence = None
         if geometry_body is not None:
             origin = self._body_T_camera_left.translation
 
@@ -443,6 +449,83 @@ class DepthPerceptionPipeline:
             geometry_metrics = build_geometry_metrics(geometry_body, obstacle_cloud, free_space_rays)
             logger.debug(
                 "Geometry-metrics stage: %.2f ms", (time.perf_counter() - metrics_t0) * 1000.0,
+            )
+
+            # Phase D4: deterministic, bounded local surface-normal
+            # estimation — reuses this SAME geometry_body cloud and origin
+            # (no second body-frame transform) — see
+            # docs/DPE_V1_PROVIDER_CONTRACT.md's D4 record and
+            # geometry.surface's own module docstring for the full
+            # frame/normalization/orientation/invalid-support contract.
+            if self._config.enable_surface_geometry:
+                surface_t0 = time.perf_counter()
+                surface_evidence = build_surface_evidence(
+                    geometry_body, origin,
+                    grid_rows=self._config.surface_grid_rows,
+                    grid_cols=self._config.surface_grid_cols,
+                    min_support_count=self._config.surface_min_support_count,
+                )
+                logger.debug(
+                    "Surface-geometry stage: %.2f ms, %d cells",
+                    (time.perf_counter() - surface_t0) * 1000.0, len(surface_evidence),
+                )
+
+        # Phase D5: deterministic, bounded depth/surface-orientation
+        # discontinuity detection — deliberately OUTSIDE the
+        # "geometry_body is not None" block above: its baseline signal
+        # (depth discontinuity) needs only depth_map, a Level 0 output
+        # present regardless of enable_geometry. surface_evidence (from
+        # the block above — None if disabled or geometry_body absent) is
+        # passed straight through and consulted only when its own grid
+        # happens to match boundary_grid_rows/cols — see
+        # docs/DPE_V1_PROVIDER_CONTRACT.md's D5 record and
+        # geometry.boundary's own module docstring for the full
+        # discontinuity-definition/invalid-vs-boundary/coordinate
+        # contract.
+        boundary_evidence = None
+        if self._config.enable_boundary_geometry:
+            boundary_t0 = time.perf_counter()
+            boundary_evidence = build_boundary_evidence(
+                depth_map, FrameId.CAMERA_OPTICAL_LEFT,
+                grid_rows=self._config.boundary_grid_rows,
+                grid_cols=self._config.boundary_grid_cols,
+                min_support_count=self._config.boundary_min_support_count,
+                depth_step_threshold_m=self._config.boundary_depth_step_threshold_m,
+                orientation_change_threshold_rad=self._config.boundary_orientation_change_threshold_rad,
+                surface_evidence=surface_evidence,
+                surface_grid_rows=self._config.surface_grid_rows,
+                surface_grid_cols=self._config.surface_grid_cols,
+            )
+            logger.debug(
+                "Boundary-geometry stage: %.2f ms, %d adjacencies",
+                (time.perf_counter() - boundary_t0) * 1000.0, len(boundary_evidence),
+            )
+
+        # Phase D6: deterministic opening/passage-structure inference —
+        # built entirely from this SAME frame's already-computed
+        # boundary_evidence (never reclassified) plus depth_map (only to
+        # recover per-cell absolute depth, which BoundaryEvidence's own
+        # unsigned depth_step_m cannot give). Always uses boundary's own
+        # grid/support-threshold configuration — no independent
+        # opening_grid_rows/cols exists. Nested underneath
+        # enable_boundary_geometry: nothing to build from otherwise. See
+        # docs/DPE_V1_PROVIDER_CONTRACT.md's D6 record and
+        # geometry.opening's own module docstring for the full
+        # admission-rule/invalid-vs-opening/coordinate contract.
+        opening_evidence = None
+        if self._config.enable_boundary_geometry and self._config.enable_opening_geometry:
+            opening_t0 = time.perf_counter()
+            opening_evidence = build_opening_evidence(
+                boundary_evidence, depth_map, FrameId.CAMERA_OPTICAL_LEFT,
+                grid_rows=self._config.boundary_grid_rows,
+                grid_cols=self._config.boundary_grid_cols,
+                min_support_count=self._config.boundary_min_support_count,
+                min_range_ratio=self._config.opening_min_range_ratio,
+                focal_length_px=self._rectified_focal_length_px,
+            )
+            logger.debug(
+                "Opening-geometry stage: %.2f ms, %d openings",
+                (time.perf_counter() - opening_t0) * 1000.0, len(opening_evidence),
             )
 
         regions = self._scene_interpreter.analyze(gray, raw_disparity, depth_map)
@@ -706,7 +789,35 @@ class DepthPerceptionPipeline:
             rotation_compensation_status=rotation_compensation_status,
             motion_aware_reliability=motion_aware_reliability,
             temporal_persistence=temporal_persistence,
+            surface_evidence=surface_evidence,
+            boundary_evidence=boundary_evidence,
+            opening_evidence=opening_evidence,
         )
+
+        # Phase D2: GeometryFrame provider contract, gated by
+        # enable_geometry_frame (default False — every existing caller is
+        # unaffected). Deliberately the LAST thing done before returning:
+        # build_geometry_frame() only reads fields off `result`, the
+        # DepthPerceptionResult just built above — no recomputation, no
+        # new algorithm — see docs/DPE_V1_PROVIDER_CONTRACT.md. Phase D7:
+        # focal_length_px/principal_point_px[0] are threaded through for
+        # ClearanceEvidence's own bearing computation — the same
+        # calibration-derived values already used for rotation
+        # compensation/surface/boundary/opening geometry, not recomputed.
+        # Phase D8: geometry_healthy_min_valid_fraction/
+        # geometry_degraded_min_valid_fraction are the SAME existing
+        # thresholds classify_geometry_quality() already used before D8 —
+        # no new threshold — for GeometryFrame.quality's own
+        # geometry_validity_state dimension.
+        if self._config.enable_geometry_frame:
+            result = dataclasses.replace(result, geometry_frame=build_geometry_frame(
+                result,
+                focal_length_px=self._rectified_focal_length_px,
+                principal_point_x_px=self._rectified_principal_point_px[0],
+                clearance_min_coverage_fraction=self._config.clearance_min_coverage_fraction,
+                geometry_healthy_min_valid_fraction=self._config.geometry_healthy_min_valid_fraction,
+                geometry_degraded_min_valid_fraction=self._config.geometry_degraded_min_valid_fraction,
+            ))
 
         self._frames_processed += 1
         self._last_confidence = result.confidence

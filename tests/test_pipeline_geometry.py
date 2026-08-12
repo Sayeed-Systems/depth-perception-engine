@@ -324,9 +324,11 @@ class TestResultContract:
         (E5), temporal_admission_status/temporal_consistency/
         temporal_stabilization/rotation_compensation_status/
         motion_aware_reliability/temporal_persistence (Level 4, Phases
-        E2-E7) were appended at the end, in that order, and every earlier
-        field name/order/default is untouched (Task 4: do not rename/
-        remove/reorder existing fields)."""
+        E2-E7) / geometry_frame (Phase D2) / surface_evidence (Phase D4)
+        / boundary_evidence (Phase D5) / opening_evidence (Phase D6) were
+        appended at the end, in that order, and every earlier field
+        name/order/default is untouched (Task 4: do not rename/remove/
+        reorder existing fields)."""
         fields = dataclasses.fields(DepthPerceptionResult)
         names = [f.name for f in fields]
 
@@ -351,8 +353,16 @@ class TestResultContract:
             "rotation_compensation_status",
             "motion_aware_reliability",
             "temporal_persistence",
+            "geometry_frame",
+            "surface_evidence",
+            "boundary_evidence",
+            "opening_evidence",
         ]
-        for field in fields[-5:]:  # temporal_consistency, temporal_stabilization, rotation_compensation_status, motion_aware_reliability, temporal_persistence
+        # temporal_consistency, temporal_stabilization,
+        # rotation_compensation_status, motion_aware_reliability,
+        # temporal_persistence, geometry_frame, surface_evidence,
+        # boundary_evidence, opening_evidence
+        for field in fields[-9:]:
             assert field.default is None
 
     def test_geometry_field_defaults_to_none(self):
@@ -457,9 +467,15 @@ class TestPublicAPIUnchanged:
         assert TopResult is DepthPerceptionResult
         assert TopConfig is PipelineConfig
 
-    def test_geometry_types_remain_tier_3_not_promoted_to_top_level(self):
+    def test_geometry_builders_remain_tier_3_not_promoted_to_top_level(self):
+        # PointCloud itself WAS promoted to Tier 1 by Phase D3 (see
+        # docs/DPE_V1_PROVIDER_CONTRACT.md's D3 record and
+        # tests/test_public_api.py) — GeometryFrame's own `geometry`/
+        # `geometry_body` fields are typed against it. The builder that
+        # *produces* one remains internal: promoting a result type does
+        # not mean promoting its producer.
         import depth_perception_engine
 
-        assert "PointCloud" not in depth_perception_engine.__all__
+        assert "PointCloud" in depth_perception_engine.__all__
         assert "PointCloudBuilder" not in depth_perception_engine.__all__
         assert not hasattr(depth_perception_engine, "PointCloudBuilder")

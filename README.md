@@ -98,6 +98,24 @@ No camera, no display, and no ROS installation required for the library
 itself. See [Running the examples](#running-the-examples) below for the
 one extra step needed for the GUI demo.
 
+**As a versioned dependency of another project** (e.g. a future
+`hybrid_perception_engine`), install the built release artifact instead
+of an editable checkout — no dev-only tooling, no repository-relative
+paths, no reliance on this checkout's `src/` layout:
+
+```bash
+python -m build                                            # from a clone of this repo — produces dist/*.whl, dist/*.tar.gz
+pip install /path/to/depth_perception_engine-0.1.0-py3-none-any.whl   # in the CONSUMING project's own environment
+```
+
+The installed wheel contains only the runtime package
+(`depth_perception_engine/`) — no `tests/`, `docs/`, or `examples/` — see
+[`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) for exactly which symbols are
+safe to import (Tier 1/2) versus internal (Tier 3, no stability
+guarantee). `GeometryFrame` is the one authoritative output contract a
+larger external perception system should consume —
+[`docs/DPE_V1_PROVIDER_CONTRACT.md`](docs/DPE_V1_PROVIDER_CONTRACT.md).
+
 ## Development Setup
 
 The canonical workflow for working on this repository — nothing beyond
@@ -462,6 +480,26 @@ Level 4's live dashboard has been run against the real stereo camera (see
 the GIF above); real IMU/measured-rotation/Jetson validation remains
 explicitly pending — see
 [`docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`](docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md).
+
+**DPE V1 provider contract:** `GeometryFrame` (`DepthPerceptionResult.geometry_frame`,
+opt-in via `PipelineConfig.enable_geometry_frame`) is the FINAL,
+authoritative geometric/temporal evidence contract this library exposes
+to any larger external perception system — full design record and
+phase-by-phase validation history (controlled ground-truth, degradation,
+sensor-contract independence, public-API hardening, performance,
+packaging/reproducibility) in
+[`docs/DPE_V1_PROVIDER_CONTRACT.md`](docs/DPE_V1_PROVIDER_CONTRACT.md).
+**Known caveat:** `SurfaceEvidence` is advisory under low-texture/
+decorrelated-stereo conditions (real `StereoSGBM`'s smoothness prior can
+report high-confidence planarity on pure noise) and must not alone be
+treated as authoritative geometry — see that document's D11 record.
+DPE owns perception evidence only: no navigation policy, no
+localization/mapping/planning/control, no ROS/hardware/simulator
+dependency (verified — `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D12 record),
+and no vehicle-specific behavior. One-page release summary — purpose,
+capabilities, the release INPUT/EXECUTION/OUTPUT contract, DPE's explicit
+non-responsibilities, and validation status — in
+[`docs/RELEASE_NOTES_V1.md`](docs/RELEASE_NOTES_V1.md).
 
 ## License
 

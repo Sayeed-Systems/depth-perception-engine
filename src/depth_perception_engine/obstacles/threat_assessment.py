@@ -82,6 +82,17 @@ class ThreatAssessor:
                 index, x1, x2   — beam index and pixel column bounds
                 distance_m      — IQR-filtered percentile depth (0 = no data)
                 status          — CLEAR / CAUTION / BLOCKED / NO_DATA
+                valid_count     — Phase D7: raw count of valid (>0, finite)
+                                   depth pixels in this beam's column,
+                                   captured BEFORE IQR filtering — the same
+                                   `valid` array the distance/status
+                                   computation below already builds, not a
+                                   second scan. Added for
+                                   geometry.provider.ClearanceEvidence's
+                                   coverage fields; does not change
+                                   distance_m/status derivation at all.
+                total_pixels    — Phase D7: this beam column's total pixel
+                                   count (`col.size`).
         """
         h, w = depth_map.shape[:2]
         beam_w = w / self._n_beams
@@ -97,6 +108,14 @@ class ThreatAssessor:
             # those operations directly to the strided 2-D view.
             col   = depth_map[:, x1:x2].flatten().astype(np.float32)
             valid = col[(col > 0) & np.isfinite(col)]
+            # Snapshot BEFORE any IQR-filtering reassignment below —
+            # `valid` itself is narrowed further inside the branch that
+            # follows, but valid_count/total_pixels describe genuine
+            # geometric SUPPORT (how much real depth evidence existed at
+            # all), not the outlier-rejected subset distance_m happens to
+            # be computed from.
+            valid_count = int(valid.size)
+            total_pixels = int(col.size)
 
             if valid.size >= self._min_valid:
                 q1, q3 = np.percentile(valid, [25, 75])
@@ -188,6 +207,8 @@ class ThreatAssessor:
                 "x2":         x2,
                 "distance_m": self._ema_dist[i],
                 "status":     self._stable_status[i],
+                "valid_count": valid_count,
+                "total_pixels": total_pixels,
             })
 
         valid_beams = [b for b in beams if b["status"] != self.NO_DATA]

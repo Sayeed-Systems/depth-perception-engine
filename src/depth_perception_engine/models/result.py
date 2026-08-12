@@ -12,6 +12,10 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 from depth_perception_engine.calibration.models import StereoCalibration
+from depth_perception_engine.geometry.boundary import BoundaryEvidence
+from depth_perception_engine.geometry.opening import OpeningEvidence
+from depth_perception_engine.geometry.provider import GeometryFrame
+from depth_perception_engine.geometry.surface import SurfaceEvidence
 from depth_perception_engine.geometry.types import FreeSpaceRays, GeometryMetrics, ObstacleCloud, PointCloud
 from depth_perception_engine.temporal.types import (
     MotionAwareReliability,
@@ -89,12 +93,24 @@ class BeamReading:
     """One vertical column-slice of the obstacle scan.
 
     Mirrors obstacles.ThreatAssessor.assess()'s per-beam dict, typed.
+
+    valid_count/total_pixels (Phase D7): raw valid-pixel coverage for this
+    beam's own depth-map column, captured before IQR outlier filtering —
+    the smallest backward-compatible extension to ThreatAssessor's return
+    shape needed to expose geometric support on
+    geometry.provider.ClearanceEvidence (see docs/DPE_V1_PROVIDER_CONTRACT.md's
+    D7 record). Defaulted to 0 so any pre-D7 direct construction of a
+    BeamReading (bypassing ThreatAssessor.assess()) remains valid; every
+    real beam ThreatAssessor itself produces always sets both explicitly.
+    distance_m/status derivation is completely unchanged by this addition.
     """
     index: int
     x1: int
     x2: int
     distance_m: float
     status: str  # ThreatAssessor.CLEAR / CAUTION / BLOCKED / NO_DATA
+    valid_count: int = 0
+    total_pixels: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +287,87 @@ class DepthPerceptionResult:
     rotation_compensation_status, or motion_aware_reliability, all of
     which remain byte-identical whether or not this field is populated.
     See docs/LEVEL4_E7_IMPLEMENTATION_PLAN.md.
+
+    geometry_frame (Phase D2): None unless PipelineConfig.enable_geometry_frame
+    is True (default False — every existing caller, including
+    mp01_perception, is byte-for-byte unaffected). When present, a
+    geometry.GeometryFrame referencing this SAME result's own
+    disparity_map/depth_map/valid_*_mask/geometry/geometry_body/
+    obstacle_cloud/free_space_rays/geometry_metrics/temporal_consistency/
+    temporal_stabilization/rotation_compensation_status/
+    motion_aware_reliability/temporal_persistence fields — built by
+    fusion.result_builder.build_geometry_frame() purely by reading them
+    off this object, never by recomputing anything. This field exists
+    only as a migration/backward-compatibility path for existing callers
+    of DepthPerceptionResult; GeometryFrame itself, not
+    DepthPerceptionResult, is the authoritative DPE V1 provider contract
+    a future external perception system should consume — see
+    docs/DPE_V1_PROVIDER_CONTRACT.md.
+
+    surface_evidence (Phase D4): None unless PipelineConfig.
+    enable_surface_geometry is True AND geometry_body itself exists (same
+    enable_geometry + body_T_camera_left extrinsic dependency
+    obstacle_cloud/free_space_rays already have — there is no body-frame
+    cloud to fit a plane from otherwise). When present, a list of
+    geometry.surface.SurfaceEvidence — one deterministic, bounded local
+    plane fit (centroid/normal/planarity, or explicitly None when a cell
+    has insufficient support) per cell of a small, independently
+    configured surface grid (PipelineConfig.surface_grid_rows/
+    surface_grid_cols). Purely geometric: answers "what surface geometry
+    is observable here," never "can a vehicle traverse/land/navigate
+    here" — no occupancy, traversability, or vehicle-specific judgment.
+    Computed once by geometry.surface.build_surface_evidence() from the
+    same geometry_body PointCloud already built for obstacle_cloud/
+    free_space_rays/geometry_metrics — no second body-frame transform, no
+    disparity/depth recomputation. Read-only of every other field: never
+    modifies disparity_map, depth_map, or any other geometry.* field, all
+    of which remain byte-identical whether or not this field is
+    populated. See docs/DPE_V1_PROVIDER_CONTRACT.md's D4 record.
+
+    boundary_evidence (Phase D5): None unless PipelineConfig.
+    enable_boundary_geometry is True. Unlike surface_evidence, this has NO
+    dependency on enable_geometry/geometry_body — its baseline signal
+    (depth discontinuity) needs only depth_map, a Level 0 output present
+    on every result. When present, a list of
+    geometry.boundary.BoundaryEvidence — one evaluated adjacency (RIGHT or
+    DOWN neighbor) per cell of a small, independently configured boundary
+    grid (PipelineConfig.boundary_grid_rows/boundary_grid_cols), each
+    reporting OBSERVED_DISCONTINUITY/NO_DISCONTINUITY/INSUFFICIENT_EVIDENCE
+    from a metric depth step and/or (opportunistically, when
+    surface_evidence's own grid happens to match) a surface-orientation
+    change — never a semantic edge class, never a behavioral judgment,
+    never an inferred opening. A missing/insufficient depth measurement on
+    either side of a pair is never reinterpreted as a discontinuity — see
+    geometry.boundary's own module docstring for the full contract.
+    Computed once by geometry.boundary.build_boundary_evidence() directly
+    from depth_map (plus surface_evidence when both are enabled and their
+    grids align) — no disparity/depth/surface recomputation. Read-only of
+    every other field: never modifies disparity_map, depth_map, geometry,
+    or surface_evidence, all of which remain byte-identical whether or not
+    this field is populated. See docs/DPE_V1_PROVIDER_CONTRACT.md's D5
+    record.
+
+    opening_evidence (Phase D6): None unless PipelineConfig.
+    enable_opening_geometry is True AND enable_boundary_geometry is ALSO
+    True (opening inference structurally requires boundary_evidence to
+    confirm flanking structure — there is nothing to build from
+    otherwise). When present, a list of geometry.opening.OpeningEvidence
+    — zero or more confirmed "geometrically supported gap between
+    surrounding physical structures" findings, never
+    passable/traversable/safe/doorway/window/fly-through claims, no
+    vehicle-size assumption, no platform-specific clearance threshold.
+    Unlike boundary_evidence/surface_evidence (one record per grid
+    cell/pair, always, including explicit no-finding states), this is a
+    POSITIVE-FINDINGS-ONLY list — an empty list means no opening was
+    confirmed this frame, not that nothing was evaluated. Computed once
+    by geometry.opening.build_opening_evidence() from this SAME frame's
+    already-computed boundary_evidence plus depth_map (only to recover
+    per-cell absolute depth, which boundary_evidence's own unsigned
+    depth_step_m cannot give) — no disparity/depth/boundary
+    classification recomputation. Read-only of every other field: never
+    modifies disparity_map, depth_map, or boundary_evidence, all of which
+    remain byte-identical whether or not this field is populated. See
+    docs/DPE_V1_PROVIDER_CONTRACT.md's D6 record.
     """
     disparity_map: np.ndarray
     depth_map: np.ndarray
@@ -292,6 +389,10 @@ class DepthPerceptionResult:
     rotation_compensation_status: Optional[str] = None
     motion_aware_reliability: Optional[MotionAwareReliability] = None
     temporal_persistence: Optional[TemporalPersistence] = None
+    geometry_frame: Optional[GeometryFrame] = None
+    surface_evidence: Optional[List[SurfaceEvidence]] = None
+    boundary_evidence: Optional[List[BoundaryEvidence]] = None
+    opening_evidence: Optional[List[OpeningEvidence]] = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -505,6 +505,132 @@ Real, calibrated global-shutter stereo rig (`/dev/video0`, the same "3D Global S
 
 **Generated artifact**: `docs/assets/11_level4_live_demo.gif` — reproduce with `python examples/generate_level4_live_gif.py` (5-second on-screen countdown to reposition the scene first, matching `generate_demo_gif.py`'s own convention).
 
+## Phase D10 addendum (2026-08-11) — controlled ground-truth validation of the DPE V1 provider contract
+
+D2-D9 built and froze `GeometryFrame` (see `docs/DPE_V1_PROVIDER_CONTRACT.md`). D10's own goal, restated: validate it quantitatively against controlled ground truth — evidence the outputs are geometrically correct, not merely that tests execute. Architecture development explicitly closed this phase: no new geometry algorithm, no evidence-contract redesign.
+
+### FrameId cleanup (resolved first)
+
+D9's completeness audit found one real, non-blocking gap: `frames.FrameId` — the source of every `frame_id` value across `GeometryFrame`'s whole type graph — was never promoted to Tier 1, unlike every other state-bearing field's own constant class. Promoted this phase: added to `depth_perception_engine.__all__`, `tests/test_public_api.py`'s `TIER_1_SYMBOLS`/`DUPLICATED_PATHS`, removed from `INTERNAL_SYMBOLS`. A pure API/export/test/doc change — every `frame_id` field already held the exact same string values before and after. Full suite (872/872) passed identically before and after the change, confirming zero behavioral impact.
+
+### What already existed (FIRST INSPECT)
+
+D4-D8 each shipped rigorous, analytically-known-value ground-truth unit tests for their OWN algorithm in isolation as part of the phase's own delivery — `tests/test_surface_geometry.py`'s exact flat/tilted-plane normal checks, `tests/test_boundary_geometry.py`'s exact known-depth-step scenarios, `tests/test_opening_geometry.py`'s exact width/height-formula checks, `tests/test_clearance_geometry.py`'s exact `atan2` bearing checks, `tests/test_geometry_frame_quality.py`'s exact valid-fraction-boundary checks. `tests/test_e7_synthetic_ground_truth.py` (Level 3, pre-dates the D-phase evidence types) established this repository's own ground-truth idiom — hand-computed expected values independent of the code under test, `1e-3 m` position tolerance — reused directly rather than inventing a new convention. No pre-existing tolerance specification was found for surface-normal angular error, boundary localization error, opening geometry error, or `GeometryFrameQuality` classification anywhere in this document or elsewhere; this document's own E6 addendum already states `GeometryQuality`'s 0.5/0.05 thresholds are "undocumented-against-any-real-dataset placeholders... not a validated value," confirming none could be reused for D10's own checks either. The one genuine, confirmed gap: no test consumed `GeometryFrame` through the public API alone (D9's own finding), and no test validated the D-phase evidence families as ONE integrated chain sharing a single scene.
+
+### New validation tests (zero source-algorithm changes)
+
+**`tests/test_d10_integrated_ground_truth.py` (7 tests)** — one shared analytic scene per scenario, run through the real `build_*` chain in the same order `pipeline.py` calls it:
+
+| Scenario | Ground truth | Measured result |
+|---|---|---|
+| Slanted plane (15°), surface normal | Independently-derived closed-form pinhole-projection formula (not the PCA fit under test) | Angular error **1.642e-4 rad (~0.0094°)**; planarity 1.000000 |
+| Multiple known depths / depth-step boundary | Hand-traced 5-column near(1.0m)/near/far(5.0m)/far/near grid | Exact — both real transitions flagged `OBSERVED_DISCONTINUITY` with `depth_step_m == 4.0`, both continuous edges `NO_DISCONTINUITY`, zero false positives |
+| Known free gap/opening | Same grid — gap flanked by two confirmed real transitions | Exact — one opening, `approx_range_m == 5.0`, `approx_width_m` matches the pinhole width formula exactly, near-wall segments correctly NOT reported as false-positive openings |
+| Controlled valid/invalid regions | 30%/70% valid/invalid disparity split | Exact — `valid_fraction == 0.3000`, `GeometryQuality.DEGRADED`, `GeometryFrameQuality.overall_state == DEGRADED`; all-invalid → `INSUFFICIENT`, all-valid → `VALID` (the absent-vs-degraded-vs-insufficient distinction holds) |
+
+**`tests/test_d10_black_box_provider.py` (10 tests)** — the comprehensive public-API-only `GeometryFrame` consumption test D9 identified as absent. Its import surface is enforced structurally via an AST scan of the test file's own source (`TestPublicApiOnlyImportSurface`) restricting it to `depth_perception_engine`, `.frames`, `.temporal` — making a dependency on `RegionAnalyzer`/`ThreatAssessor`/`TemporalHistory`/`TemporalRecord`/any private module impossible by construction. Runs the real, unmodified `DepthPerceptionPipeline.process()` — real `StereoSGBM`, not synthetic disparity injection (the one thing `tests/test_e7_synthetic_ground_truth.py` never exercised) — on an engineered stereo pair with a known 24px integer shift (smoothed low-frequency noise texture; `rectify=False`, matching this document's own established synthetic-fixture precedent since the real calibration's undistort maps don't apply to a flat unrectified synthetic image):
+
+| Metric | Measured |
+|---|---|
+| Valid coverage | 60.0% |
+| Disparity error (vs. known 24px shift) | median 0.0000 px, mean 0.0030 px, std 0.0252 px |
+| Depth error (vs. expected 1.6573 m) | median 0.000000 m, std 0.001715 m |
+| Determinism | Two independent pipeline instances on identical input → bit-identical `GeometryFrame` array/list fields |
+| Temporal state transitions (4 identical repeated frames) | `temporal_consistency.state`: `INSUFFICIENT_EVIDENCE` (frame 0) → `CONSISTENT` (frames 1-3); `temporal_persistence.state` reaches `CLASSIFIED`; obstacle/ray evidence counts provably stable across all 4 frames |
+
+Also checked, all through `GeometryFrame`'s own public fields: obstacle/ray counts exactly match valid body-geometry count; `ClearanceEvidence` bearing bounds monotonic and coverage fractions in `[0, 1]`; `NO_EVIDENCE` sectors never carry a distance; `frame_id` fields use the newly-Tier-1 `FrameId` vocabulary consistently; `GeometryFrameQuality` rollup matches its own documented threshold logic (reproduced inline from public config values, not by importing the internal classifier).
+
+### Directional clearance / bearing (scenario 7)
+
+Classified PASS on the strength of `tests/test_clearance_geometry.py`'s own pre-existing exact `atan2` bearing checks (Phase D7) plus this phase's black-box cross-field consistency checks above — not re-derived from scratch, since no gap existed to close.
+
+### Proposed candidate threshold (not adopted as a spec)
+
+A real SGBM-vs-engineered-truth disparity error bound of **1.0 px median** was asserted in `tests/test_d10_black_box_provider.py` as a regression guard — explicitly labeled in that test's own comment as a >30x-margin PROPOSED value derived from what was actually measured on this one synthetic fixture (median 0.0 px, std 0.0252 px), not a validated real-hardware target. Per this document's own established discipline (see the E6 addendum's `GeometryQuality` threshold note above), a real deployment should derive its own bound from its own target-hardware measurements.
+
+### Failures/anomalies
+
+None. One initially-surprising, documented (not hidden) observation: `motion_aware_reliability.state` reads `DEGRADED` from frame 1 onward in the repeated-frame sequence even with no `MotionHint` ever supplied — traced to `temporal/reliability.py`'s own documented behavior (absence of motion evidence is conservatively treated as `DEGRADED`, never silently upgraded to `RELIABLE`) — a pre-existing, deliberate design choice, not a D10-discovered defect.
+
+### Full regression test count
+
+`pytest tests/ -q`: **889 passed** (872 before D10, +17 new: 7 in `test_d10_integrated_ground_truth.py`, 10 in `test_d10_black_box_provider.py`). Zero existing test modified, zero source algorithm modified.
+
+### Final decision (D10)
+
+**D10 VALIDATION: PASS.** Every scenario this phase could analytically or empirically construct (slanted plane, known multiple depths, known depth-step discontinuity, known free gap/opening, controlled valid/invalid regions, real SGBM disparity/depth error, black-box provider consumption, determinism, temporal state transitions) matched hand-computed or independently-derived expected values; zero algorithmic defect found. **D10 READINESS: READY** — sufficient controlled evidence exists to proceed to a future degradation/failure-validation phase (not started here, per this phase's own explicit scope boundary). See `docs/DPE_V1_PROVIDER_CONTRACT.md`'s "D10 implementation record" for the complete narrative.
+
+## Phase D11 addendum (2026-08-11) — degradation / failure validation
+
+D10 validated GOOD evidence produces correct geometry. D11's own goal: validate the other half — that degraded, invalid, incomplete, or unavailable evidence produces predictable, conservative, honest output, never fabricated trustworthy geometry to maintain output continuity. Architecture stayed closed; findings were reported, not repaired ("no automatic repair" was this phase's own explicit rule).
+
+### What already existed
+
+Phase E6's adversarial-input matrix (`tests/test_adversarial_geometry.py`, scenarios A-P) and the full Level 4 temporal suite (`tests/test_temporal_history.py`'s exhaustive admission-rule coverage, `tests/test_temporal_consistency.py`'s real-pipeline contradiction injection, `tests/test_rotation_compensation.py`/`tests/test_motion_aware_reliability.py`'s motion-hint edge cases) already closed most of the 15 named scenarios. Re-confirmed passing, not duplicated.
+
+### New tests — `tests/test_d11_degradation_validation.py` (16 tests)
+
+Closed five genuine gaps: real degraded/corrupted images (not hand-built arrays) checked against the D-phase evidence fields (`SurfaceEvidence`/`BoundaryEvidence`/`OpeningEvidence`/`GeometryFrameQuality`, all postdating E6); a NaN/Inf-poisoned `MotionHint` (`MotionHint.__post_init__` validates shape/type only, never finiteness); `StereoCalibration`'s own construction-boundary check (no dedicated test existed); a real end-to-end temporal contradiction tied through to `GeometryFrameQuality`'s rollup; and `GeometryFrame`-level (not just Level 3) exact recovery across VALID→DEGRADED→VALID.
+
+### Findings
+
+**Finding 1 (significant): `SurfaceEvidence.planarity` reads ~0.99 on pure decorrelated noise.** Real `StereoSGBM`'s semi-global smoothness regularization does not degrade into per-pixel-random output under total left/right decorrelation — it produces a spatially smooth, plausible-looking disparity field (a real SGBM property, not a DPE defect). `SurfaceEvidence`'s PCA fit, given no way to distinguish a real smooth surface from this degenerate output, reports near-perfect planarity (mean 0.9935-0.9961 across 5 independent noise seeds) on evidence built entirely from noise. `GeometryMetrics.valid_fraction`/`GeometryQuality` DID respond correctly (measurably DEGRADED); no depth/obstacle/free-space geometry was ever fabricated (validity gating held throughout — this is specifically a `SurfaceEvidence`-confidence over-claim, DPE's one evidence family whose entire purpose is expressing fit confidence). `depth_perception_engine.quality.looks_like_garbage_frame()` — an existing detector built for exactly this input class — is never called anywhere inside `pipeline.py`'s `process()` path (confirmed by source grep). **Not fixed here** — flagged for a future, separately-scoped corrective phase.
+
+**Finding 2 (minor): `RotationCompensationStatus.APPLIED` is reported even when a NaN-poisoned `MotionHint` produces zero usable compensated output.** Traced precisely: NaN propagates through `integrate_angular_velocity()` into `_reproject_source_to_target()`, producing a `RuntimeWarning` on the NaN→int64 cast; the resulting garbage index correctly fails the existing bounds check, so the compensated snapshot ends up entirely empty (this codebase's own "0.0 is invalid, never fabricated" convention held) and `temporal_consistency` correctly falls back to `INSUFFICIENT_EVIDENCE`. No unsafe fabrication — only the status label itself claims a success that didn't meaningfully occur. **Not fixed here.**
+
+### Everything else: correct
+
+Partial real occlusion → SAFE-DEGRADED (valid_fraction measurably lower, quality DEGRADED, obstacle/ray counts never exceeded the unoccluded baseline). Duplicate-timestamp rejection → `GeometryFrame` stayed fully populated and bit-identical, no poisoning of the next valid admission. Extreme (50 rad/s) angular velocity → `UNRELIABLE`, no crash. A genuine real temporal contradiction → `GeometryFrameQuality.overall_state == DEGRADED` with the correct reason. VALID→DEGRADED(noise)→VALID → `GeometryFrame`'s `geometry_body`/`obstacle_cloud` recovered bit-identically. `StereoCalibration` correctly rejects malformed shapes at construction.
+
+### Full regression
+
+`pytest tests/ -q`: **905 passed** (889 before D11, +16 new). Zero existing test modified, zero source algorithm modified. D10's own 17 tests re-confirmed unmodified.
+
+### Final decision (D11)
+
+**D11 DEGRADATION VALIDATION: PARTIAL** — not PASS, specifically because of Finding 1, reported honestly rather than minimized. **D11 READINESS: READY WITH A DOCUMENTED CAVEAT** — sufficient controlled failure/degradation evidence exists to proceed to simulated stereo + IMU system validation; Finding 1 should be carried forward as a known, bounded limitation (treat `SurfaceEvidence` as advisory unless corroborated, under low-texture conditions), not treated as blocking, since fabricated depth/obstacle/free-space geometry never occurred in any scenario tested. See `docs/DPE_V1_PROVIDER_CONTRACT.md`'s "D11 implementation record" for the complete narrative.
+
+## Phase D14 addendum (2026-08-12) — performance / bounded-resource validation
+
+Full methodology, environment, and per-config numbers: `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D14 record. Summary here, matching this document's own established per-phase table convention.
+
+### Environment
+
+Dev container (not Jetson/target hardware — same disclosure discipline every prior phase's own benchmark used), Linux, Python 3.13.14, NumPy 2.5.1, OpenCV 5.0.0, 8 logical CPUs.
+
+### Performance table — real hardware calibration (320x240, rectify=True), n=100 steady-state samples/config, 15-frame discarded warm-up
+
+| Config | mean | median | p95 | p99 | FPS (mean-based) |
+|---|---|---|---|---|---|
+| A. core geometry only | 21.46 ms | 20.78 ms | 25.93 ms | 26.42 ms | 46.6 |
+| B. GeometryFrame + full V1 evidence | 34.26 ms | 32.76 ms | 40.61 ms | 42.63 ms | 29.2 |
+| C. Level-4 temporal only | 23.33 ms | 23.18 ms | 26.76 ms | 27.87 ms | 42.9 |
+| D. full DPE V1 candidate | 35.86 ms | 35.59 ms | 38.31 ms | 41.41 ms | 27.9 |
+
+Synthetic 640x480 (rectify=False, same resolution E2-E6's own benchmarks established) shows the same ordering (A < C < B < D) at proportionally higher absolute latency (150-187 ms mean) — full numbers in the D14 record and `results/d14_performance_validation.json`.
+
+No specific real-time rate requirement has been defined for this library by any consumer to date (same standing position as E7's own 42.0 FPS report above) — these numbers are reported as measured fact on this development hardware, not judged against an invented target.
+
+### Memory / long-run results (500 frames, full V1 candidate config, real hardware resolution)
+
+RSS grew from 100372 KiB (frame 1) to 112716 KiB (frame 500), +12344 KiB total — but front-loaded: +12188 KiB occurred in the first 100 frames (while `TemporalHistory` filled to its configured `max_records=30` and `TemporalPersistenceTracker`'s fixed-shape arrays were first allocated), then only +156 KiB (~0.39 KiB/frame) across the remaining 400 frames — consistent with a bounded, one-time allocation ramp reaching steady state, not a continuing per-frame leak. `TemporalHistory` length never exceeded its configured bound (max observed 30, `temporal_max_records=30`). `TemporalPersistenceTracker`'s internal grid stayed a single fixed shape, `(60, 80)`, for the entire run — never resized. `GeometryFrame`'s large array/object fields (`depth_map`, `disparity_map`, `geometry`, `geometry_body`, `obstacle_cloud`, `free_space_rays`) were confirmed, by direct object-identity check, to be the exact same objects as `DepthPerceptionResult`'s own fields — zero duplication.
+
+### Reset behavior
+
+`pipeline.reset()` followed by one frame: `frames_processed` 0 then 1, `TemporalHistory` length 0, `temporal_consistency.state == "INSUFFICIENT_EVIDENCE"` (the documented genuine-first-frame behavior) — matches pre-reset baseline exactly.
+
+### Major latency contributors (cProfile, 30 frames, full V1 candidate config)
+
+`cv2.StereoMatcher.compute` (SGBM matching itself) is the single largest identifiable contributor (~7 ms/frame), followed by a long, roughly-evenly-distributed tail: NumPy reduction/percentile/histogram calls inside `RegionAnalyzer`'s texture/entropy statistics, `SceneInterpreter.analyze`, `PointCloudBuilder.build`, `build_free_space_rays`/`build_obstacle_cloud`, `DepthEstimator.estimate_point_cloud`, `ThreatAssessor.assess`, and `build_surface_evidence`. No single pathological bottleneck was found — cost is spread across many already-vectorized stages.
+
+### Full regression
+
+`pytest tests/ -q`: **942 passed** (unchanged from D13 — zero source/test file touched, only a new benchmark script added under `examples/`).
+
+### Final decision (D14)
+
+**D14 PERFORMANCE VALIDATION: PASS** (PERFORMANCE CHARACTERIZED; no invented threshold — no documented real-time rate target exists for this library). **BOUNDED-RESOURCE: PASS** — `TemporalHistory` stayed within its configured bound, `TemporalPersistenceTracker`'s state stayed fixed-shape, `GeometryFrame` introduced zero array duplication, and RSS growth was a bounded, front-loaded ramp to steady state, not unbounded growth, over the one 500-frame run measured. **D14 READINESS: READY** — proceed to packaging/reproducibility/external-consumer validation. See `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D14 record for the complete narrative, including the honest caveat on RSS-growth confidence (one run, one platform, not a formal leak-freedom proof).
+
 ## Final decision
 
 **RESTORED WITH DOCUMENTED LIMITATIONS.**

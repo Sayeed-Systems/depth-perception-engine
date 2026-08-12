@@ -18,9 +18,12 @@ import importlib
 import depth_perception_engine as dpe
 import depth_perception_engine.calibration as dpe_calibration
 import depth_perception_engine.config as dpe_config
+import depth_perception_engine.frames as dpe_frames
+import depth_perception_engine.geometry as dpe_geometry
 import depth_perception_engine.models as dpe_models
 import depth_perception_engine.pipeline as dpe_pipeline
 import depth_perception_engine.pipeline.api as dpe_pipeline_api
+import depth_perception_engine.temporal as dpe_temporal
 import depth_perception_engine.traversability as dpe_traversability
 
 TIER_1_SYMBOLS = {
@@ -38,6 +41,54 @@ TIER_1_SYMBOLS = {
     "RegionStats",
     "TextureClass",
     "load_stereo_calibration",
+    # Phase D2: GeometryFrame — the final, authoritative DPE V1 provider
+    # contract — plus the Level 4 temporal result contracts it carries.
+    "GeometryFrame",
+    "TemporalConsistency",
+    "TemporalConsistencyState",
+    "TemporalStabilization",
+    "TemporalStabilizationState",
+    "RotationCompensationStatus",
+    "MotionAwareReliability",
+    "MotionAwareReliabilityState",
+    "TemporalPersistence",
+    "TemporalPersistenceState",
+    "TemporalPersistenceCellState",
+    # Phase D3: the four Level 3 geometry result types GeometryFrame's own
+    # fields are typed against, plus the two new neutral evidence
+    # contracts extracted from traversability/obstacles.
+    "PointCloud",
+    "ObstacleCloud",
+    "FreeSpaceRays",
+    "GeometryMetrics",
+    "RegionEvidence",
+    "ClearanceEvidence",
+    # Phase D4: local surface-normal/planarity evidence.
+    "SurfaceEvidence",
+    # Phase D5: geometric boundary/discontinuity evidence, plus its two
+    # state-constant classes.
+    "BoundaryEvidence",
+    "BoundaryState",
+    "BoundaryDirection",
+    # Phase D6: geometric opening/passage-structure evidence.
+    "OpeningEvidence",
+    # Phase D7: ClearanceEvidence's own coverage/support state-constant
+    # class (ClearanceEvidence itself already Tier 1 since D3).
+    "ClearanceSupportState",
+    # Phase D8: the structured geometric quality/uncertainty rollup.
+    "GeometryFrameQuality",
+    "GeometryFrameQualityState",
+    # Phase D10: FrameId — the canonical public vocabulary required to
+    # interpret every frame_id field across GeometryFrame's own type
+    # graph (see docs/DPE_V1_PROVIDER_CONTRACT.md's D9/D10 records).
+    "FrameId",
+    # Phase D13: MotionHint — required to construct a complete public
+    # INPUT contract (StereoObservation.motion_hint/.motion_hints,
+    # DepthPerceptionPipeline.process()'s own motion_hint/motion_hints
+    # parameters) without an internal depth_perception_engine.temporal
+    # import. Not part of GeometryFrame's own output type graph (see
+    # docs/DPE_V1_PROVIDER_CONTRACT.md's D13 record).
+    "MotionHint",
 }
 
 TIER_2_SYMBOLS = {
@@ -71,6 +122,33 @@ DUPLICATED_PATHS = {
     "estimate_depth": dpe_pipeline,
     "detect_obstacles": dpe_pipeline,
     "classify_traversability": dpe_pipeline,
+    "GeometryFrame": dpe_geometry,
+    "TemporalConsistency": dpe_temporal,
+    "TemporalConsistencyState": dpe_temporal,
+    "TemporalStabilization": dpe_temporal,
+    "TemporalStabilizationState": dpe_temporal,
+    "RotationCompensationStatus": dpe_temporal,
+    "MotionAwareReliability": dpe_temporal,
+    "MotionAwareReliabilityState": dpe_temporal,
+    "TemporalPersistence": dpe_temporal,
+    "TemporalPersistenceState": dpe_temporal,
+    "TemporalPersistenceCellState": dpe_temporal,
+    "PointCloud": dpe_geometry,
+    "ObstacleCloud": dpe_geometry,
+    "FreeSpaceRays": dpe_geometry,
+    "GeometryMetrics": dpe_geometry,
+    "RegionEvidence": dpe_geometry,
+    "ClearanceEvidence": dpe_geometry,
+    "SurfaceEvidence": dpe_geometry,
+    "BoundaryEvidence": dpe_geometry,
+    "BoundaryState": dpe_geometry,
+    "BoundaryDirection": dpe_geometry,
+    "OpeningEvidence": dpe_geometry,
+    "ClearanceSupportState": dpe_geometry,
+    "GeometryFrameQuality": dpe_geometry,
+    "GeometryFrameQualityState": dpe_geometry,
+    "FrameId": dpe_frames,
+    "MotionHint": dpe_temporal,
 }
 
 # Tier 2 functions are also reachable via their defining module directly.
@@ -255,43 +333,69 @@ class TestInternalContractsStayNonPublic:
     them (see docs/LEVEL3_PUBLIC_API.md)."""
 
     INTERNAL_SYMBOLS = [
-        "PointCloud", "ObstacleCloud", "FreeSpaceRays", "GeometryMetrics",
         "RigCalibration", "CameraIntrinsics", "StereoExtrinsics",
-        "RectificationParameters", "CameraModel", "RigidTransform", "FrameId",
+        "RectificationParameters", "CameraModel", "RigidTransform",
+        # FrameId (unlike RigidTransform) was promoted to Tier 1 at Phase
+        # D10 — it is the canonical public vocabulary required to
+        # interpret every frame_id field across GeometryFrame's own type
+        # graph, and promoting it required only API/export/test/doc
+        # changes, no behavioral change (see docs/DPE_V1_PROVIDER_CONTRACT.md's
+        # D10 record). RigidTransform stays Tier 3 — it is a pipeline
+        # CONSTRUCTOR input (body_T_camera_left), never part of
+        # GeometryFrame's own output type graph.
         # internal stage/helper classes
         "DisparityEngine", "RectificationEngine", "DepthEstimator",
         "DistanceReader", "ThreatAssessor", "RegionAnalyzer",
         "SceneInterpreter", "FrameSplitter",
-        # Level 3 producers (E2-E6) — geometry.* stays Tier 3 throughout,
-        # see docs/LEVEL3_PUBLIC_API.md's E3 update for why PointCloud
-        # itself was deliberately not promoted even once it had a real
-        # producer.
+        # Level 3 producers/algorithms stay Tier 3 even after Phase D3
+        # promoted their RESULT types (PointCloud, ObstacleCloud,
+        # FreeSpaceRays, GeometryMetrics — see TIER_1_SYMBOLS): a caller
+        # consuming GeometryFrame reads these results, it never
+        # constructs a PointCloudBuilder or calls build_obstacle_cloud()
+        # itself. See docs/DPE_V1_PROVIDER_CONTRACT.md's D3 update.
         "PointCloudBuilder", "transform_point_cloud", "build_obstacle_cloud",
         "build_free_space_rays", "build_geometry_metrics", "GeometryQuality",
         "classify_geometry_quality",
-        # Level 4 (Phase E1) — temporal.* stays Tier 3, same reasoning as
-        # geometry.* above: nothing produces or consumes a MotionHint yet.
-        "MotionHint",
+        # Phase D4 — same reasoning: SurfaceEvidence (the result type) is
+        # Tier 1, build_surface_evidence (the algorithm) stays Tier 3.
+        "build_surface_evidence",
+        # Phase D5 — same reasoning: BoundaryEvidence (the result type) is
+        # Tier 1, build_boundary_evidence (the algorithm) stays Tier 3.
+        "build_boundary_evidence",
+        # Phase D6 — same reasoning: OpeningEvidence (the result type) is
+        # Tier 1, build_opening_evidence (the algorithm) stays Tier 3.
+        "build_opening_evidence",
+        # MotionHint (unlike RigidTransform) was promoted to Tier 1 at
+        # Phase D13 — it is required to construct a complete public INPUT
+        # contract (StereoObservation.motion_hint/.motion_hints,
+        # DepthPerceptionPipeline.process()'s own motion_hint/
+        # motion_hints parameters); see docs/DPE_V1_PROVIDER_CONTRACT.md's
+        # D13 record.
         # Level 4 (Phase E2) — temporal history stays Tier 3 too: it is
         # infrastructure DepthPerceptionPipeline owns internally, not a
         # symbol a normal caller is meant to construct directly.
         "TemporalRecord", "TemporalHistory", "TemporalAdmissionStatus",
-        # Level 4 (Phase E3) — same reasoning: computed internally by
-        # process(), not constructed directly by a normal caller.
-        "TemporalConsistency", "TemporalConsistencyState", "compute_temporal_consistency",
-        # Level 4 (Phase E4) — same reasoning.
-        "TemporalStabilization", "TemporalStabilizationState", "compute_temporal_stabilization",
-        # Level 4 (Phase E5) — same reasoning.
-        "RotationCompensationStatus", "compute_rotation_compensation",
-        # Level 4 (Phase E7) — compensate_prior_geometry_with_payload lives
-        # in the same E5 module (shares its reprojection math) but is a
-        # new symbol added at E7; same Tier 3 reasoning.
+        # Level 4 algorithm implementation functions stay Tier 3 even
+        # after Phase D2 promoted their RESULT/EVIDENCE dataclasses
+        # (TemporalConsistency, TemporalStabilization,
+        # RotationCompensationStatus, MotionAwareReliability,
+        # TemporalPersistence — see TIER_1_SYMBOLS) — a caller consuming
+        # GeometryFrame reads these results, it never calls the functions
+        # that produce them; those remain internal to process(). See
+        # docs/DPE_V1_PROVIDER_CONTRACT.md's D2 update.
+        "compute_temporal_consistency",
+        "compute_temporal_stabilization",
+        "compute_rotation_compensation",
+        # compensate_prior_geometry_with_payload lives in the same E5
+        # module (shares its reprojection math) but is a new symbol added
+        # at E7; same Tier 3 reasoning.
         "compensate_prior_geometry_with_payload",
-        # Level 4 (Phase E6) — same reasoning.
-        "MotionAwareReliability", "MotionAwareReliabilityState", "compute_motion_aware_reliability",
-        # Level 4 (Phase E7) — same reasoning: computed internally by
-        # process(), not constructed directly by a normal caller.
-        "TemporalPersistence", "TemporalPersistenceState", "TemporalPersistenceCellState",
+        "compute_motion_aware_reliability",
+        # Level 4 (Phase E7) — the tracker itself is stateful
+        # infrastructure DepthPerceptionPipeline owns internally, not a
+        # symbol a normal caller is meant to construct directly — stays
+        # Tier 3 even though its output type (TemporalPersistence) is
+        # now Tier 1.
         "TemporalPersistenceTracker",
     ]
 
@@ -305,11 +409,129 @@ class TestInternalContractsStayNonPublic:
 
     def test_geometry_and_quality_submodules_are_still_reachable_as_internal_paths(self):
         # Confirms these weren't accidentally broken — just not promoted.
-        from depth_perception_engine.geometry import PointCloud
+        # PointCloudBuilder (the producer), unlike PointCloud (the result
+        # type it builds, promoted Tier 1 by Phase D3), stays internal.
+        from depth_perception_engine.geometry import PointCloudBuilder
         from depth_perception_engine.quality.frame_quality import looks_like_garbage_frame
 
-        assert PointCloud is not None
+        assert PointCloudBuilder is not None
         assert callable(looks_like_garbage_frame)
+
+
+class TestGeometryFrameTypeGraphIsFullyPublic:
+    """Phase D13 structural guard: automatically (not by hand-maintained
+    list) proves every DPE-owned type reachable from GeometryFrame's own
+    field annotations is Tier 1 — so a future phase that adds a new
+    GeometryFrame field typed against a Tier-3/internal class fails HERE,
+    at the type-graph level, rather than only being caught if someone
+    remembers to update TIER_1_SYMBOLS by hand. This is the literal
+    "cannot make GeometryFrame depend on internal-only types" guard the
+    D13 task asked for.
+
+    Method: typing.get_type_hints(GeometryFrame) resolves every field's
+    real class (unwrapping Optional/List/Dict via get_origin/get_args
+    recursively); any resolved class whose own module lives under
+    depth_perception_engine is required to be a Tier 1 symbol, identical
+    object identity to depth_perception_engine.<name>. Builtins (str,
+    float) and numpy.ndarray are skipped — they carry no DPE-owned
+    contract to promote.
+    """
+
+    @staticmethod
+    def _dpe_owned_leaf_classes(tp):
+        import typing
+
+        origin = typing.get_origin(tp)
+        if origin is None:
+            if isinstance(tp, type) and tp.__module__.startswith("depth_perception_engine"):
+                yield tp
+            return
+        for arg in typing.get_args(tp):
+            if arg is type(None):
+                continue
+            yield from TestGeometryFrameTypeGraphIsFullyPublic._dpe_owned_leaf_classes(arg)
+
+    def test_every_dpe_owned_type_reachable_from_geometry_frame_is_tier1(self):
+        import typing
+
+        from depth_perception_engine.geometry.provider import GeometryFrame
+
+        hints = typing.get_type_hints(GeometryFrame)
+        offenders = []
+        for field_name, tp in hints.items():
+            for cls in self._dpe_owned_leaf_classes(tp):
+                if cls.__name__ not in TIER_1_SYMBOLS:
+                    offenders.append(f"{field_name}: {cls.__module__}.{cls.__qualname__}")
+                elif getattr(dpe, cls.__name__) is not cls:
+                    offenders.append(f"{field_name}: {cls.__name__} is Tier 1 but object identity mismatch")
+        assert not offenders, (
+            "GeometryFrame depends on non-Tier-1 (or identity-mismatched) "
+            f"DPE-owned type(s): {offenders}"
+        )
+
+    def test_at_least_the_known_evidence_families_were_actually_checked(self):
+        # Sanity guard on the guard itself: proves the recursive walk
+        # above is actually descending into Optional[List[...]]/
+        # Optional[Dict[str, ...]] wrappers, not silently matching zero
+        # fields (a test that can never fail is not a test).
+        import typing
+
+        from depth_perception_engine.geometry.provider import GeometryFrame
+
+        hints = typing.get_type_hints(GeometryFrame)
+        found_names = {
+            cls.__name__
+            for tp in hints.values()
+            for cls in self._dpe_owned_leaf_classes(tp)
+        }
+        expected_minimum = {
+            "PointCloud", "ObstacleCloud", "FreeSpaceRays", "GeometryMetrics",
+            "TemporalConsistency", "TemporalStabilization", "MotionAwareReliability",
+            "TemporalPersistence", "SurfaceEvidence", "BoundaryEvidence",
+            "OpeningEvidence", "GeometryFrameQuality",
+        }
+        assert expected_minimum <= found_names, (
+            f"Expected evidence families not found by the recursive walk: "
+            f"{expected_minimum - found_names}"
+        )
+
+
+class TestCoreContractFloor:
+    """Phase D13: the minimal INPUT/EXECUTION/OUTPUT contract named
+    explicitly by the D13 task's own 'PUBLIC API RULE' — a floor that
+    must never shrink. TestAllIsExactlyIntentional already fails on ANY
+    drift from the full TIER_1_SYMBOLS set; this test is deliberately
+    narrower and independent of that hand-maintained set, so even a
+    (hypothetical) future accidental edit to TIER_1_SYMBOLS itself cannot
+    silently carry a real regression through both guards at once."""
+
+    CORE_INPUT = {"StereoObservation", "StereoCalibration", "MotionHint", "PipelineConfig"}
+    CORE_EXECUTION = {"DepthPerceptionPipeline"}
+    CORE_OUTPUT = {"GeometryFrame"}
+
+    def test_core_input_execution_output_symbols_remain_tier1(self):
+        core = self.CORE_INPUT | self.CORE_EXECUTION | self.CORE_OUTPUT
+        missing_from_root = [name for name in core if not hasattr(dpe, name)]
+        missing_from_all = [name for name in core if name not in dpe.__all__]
+        assert not missing_from_root, f"Core contract symbol(s) missing from package root: {missing_from_root}"
+        assert not missing_from_all, f"Core contract symbol(s) missing from __all__: {missing_from_all}"
+
+    def test_core_output_alone_is_sufficient_to_construct_and_run_a_pipeline(self, config, calibration, stereo_pair):
+        """A minimal proof that the CORE_INPUT/CORE_EXECUTION symbols
+        alone (no other Tier 1 symbol) are sufficient to drive the
+        pipeline and obtain a GeometryFrame — the literal D13 workflow:
+        configure -> construct input -> run pipeline -> consume
+        GeometryFrame."""
+        from depth_perception_engine import DepthPerceptionPipeline, GeometryFrame, PipelineConfig, StereoCalibration
+
+        assert isinstance(config, PipelineConfig)
+        assert isinstance(calibration, StereoCalibration)
+        left, right = stereo_pair
+
+        full_config = PipelineConfig(enable_geometry=True, enable_geometry_frame=True)
+        pipeline = DepthPerceptionPipeline(full_config, calibration)
+        result = pipeline.process(left, right)
+        assert isinstance(result.geometry_frame, GeometryFrame)
 
 
 class TestPackageDocstringMatchesExports:

@@ -14,6 +14,7 @@ consumer of this engine's output — not part of the Depth Perception Engine
 itself. See docs/INTEGRATION_READINESS.md.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -288,6 +289,161 @@ class PipelineConfig:
     # event than the dropout grace window, not the same boundary.
     persistence_expiration_absence_frames: int = 5
 
+    # --- Phase D4: local surface geometry ---
+    # Gates DepthPerceptionPipeline's local-plane/surface-normal estimation
+    # stage (geometry.surface.build_surface_evidence) — see
+    # docs/DPE_V1_PROVIDER_CONTRACT.md's D4 record. Nested underneath
+    # enable_geometry (no effect unless a geometry_body PointCloud actually
+    # exists — same body_T_camera_left extrinsic dependency
+    # enable_obstacle_geometry/enable_free_space_rays already have; there
+    # is no body-frame cloud to fit a plane from otherwise), same "opt-in,
+    # existing callers unaffected" discipline as every other enable_* flag
+    # in this file. Default False: reproduces pre-D4 behavior exactly —
+    # surface_evidence stays None on both DepthPerceptionResult and
+    # GeometryFrame, and build_surface_evidence() is never even called.
+    enable_surface_geometry: bool = False
+
+    # Surface grid dimensions — independently configured from
+    # traversability_grid_rows/cols (a different domain: this partitions
+    # geometry_body's own 3D point grid for plane-fitting, not the 2D
+    # image for RegionAnalyzer) and from geometry_sampling_stride (a
+    # per-point decimation factor, not a cell count). 3x3 default matches
+    # this codebase's own established "3x3 canonical grid" convention
+    # (traversability_grid_rows/cols' own default) — not a physical
+    # constant, a policy default like every other grid/threshold choice in
+    # this file.
+    surface_grid_rows: int = 3
+    surface_grid_cols: int = 3
+
+    # Minimum valid points a surface-grid cell must contain before a plane
+    # is fit — see geometry.surface.build_surface_evidence's own
+    # docstring for what happens below this (centroid_m/normal/planarity
+    # all stay None; support_count/support_fraction are still reported).
+    # Must be >= 3 (the geometric minimum to uniquely determine a plane —
+    # validated below, not merely documented). 30 is a policy choice for
+    # numerically stable fitting, not tuned against any dataset — same
+    # discipline as geometry_healthy_min_valid_fraction above.
+    surface_min_support_count: int = 30
+
+    # --- Phase D5: geometric boundaries/discontinuities ---
+    # Gates DepthPerceptionPipeline's depth/surface-orientation
+    # discontinuity stage (geometry.boundary.build_boundary_evidence) —
+    # see docs/DPE_V1_PROVIDER_CONTRACT.md's D5 record. Deliberately NOT
+    # nested under enable_geometry (unlike enable_surface_geometry): its
+    # baseline signal (depth discontinuity) needs only depth_map, a Level
+    # 0 output present on every result regardless of any other flag —
+    # same independence enable_temporal already has. Default False, same
+    # "opt-in, existing callers unaffected" discipline as every enable_*
+    # flag in this file.
+    enable_boundary_geometry: bool = False
+
+    # Boundary grid dimensions — independent of both
+    # traversability_grid_rows/cols and surface_grid_rows/cols (different
+    # domain, own grid — see geometry.boundary's own "Grid independence"
+    # docstring section for why RegionEvidence/SurfaceEvidence are never
+    # forced onto this grid or vice versa). Defaults to 3x3, matching
+    # surface_grid_rows/cols's own default — not because the two grids are
+    # coupled (they are evaluated independently), but so that a caller
+    # enabling both surface and boundary geometry at their shared default
+    # gets surface-orientation-enhanced boundary evidence "for free",
+    # without DPE forcing any redesign of either type.
+    boundary_grid_rows: int = 3
+    boundary_grid_cols: int = 3
+
+    # Minimum valid depth pixels a cell must contain before it can be
+    # compared against a neighbor at all — see
+    # geometry.boundary.build_boundary_evidence's own docstring for what
+    # happens below this (state becomes INSUFFICIENT_EVIDENCE; a missing
+    # depth measurement is never treated as a boundary). Must be >= 1. 30
+    # is a policy choice, same discipline and magnitude as
+    # surface_min_support_count above — not tuned against any dataset.
+    boundary_min_support_count: int = 30
+
+    # Minimum |median depth difference| (metres) between two adjacent
+    # cells to report OBSERVED_DISCONTINUITY via the depth signal. A
+    # policy choice — "how big a jump counts as a genuine surface break"
+    # — not a physical constant, same "conservative,
+    # undocumented-against-any-real-dataset placeholder" discipline as
+    # temporal_consistency_agreement_tolerance_m.
+    boundary_depth_step_threshold_m: float = 0.15
+
+    # Minimum angle (radians) between two adjacent cells'
+    # SurfaceEvidence.normal to report OBSERVED_DISCONTINUITY via the
+    # orientation signal (only evaluated when surface_grid_rows/cols match
+    # boundary_grid_rows/cols — see geometry.boundary's own "Grid
+    # independence" section). ~30 degrees: real geometric corners
+    # (e.g. a wall meeting a floor) are typically near-perpendicular, so a
+    # much larger threshold than E6's own ~5-degree
+    # reliability_max_angular_motion_rad is appropriate here — the two
+    # thresholds answer unrelated physical questions despite both being
+    # angles. A policy choice, not tuned against any dataset.
+    boundary_orientation_change_threshold_rad: float = 0.5236  # ~30 degrees
+
+    # --- Phase D6: geometric openings / passage structure ---
+    # Gates DepthPerceptionPipeline's opening-inference stage
+    # (geometry.opening.build_opening_evidence) — see
+    # docs/DPE_V1_PROVIDER_CONTRACT.md's D6 record. Nested underneath
+    # enable_boundary_geometry (no effect unless it is also True — opening
+    # inference structurally requires boundary_evidence to confirm
+    # flanking structure; there is nothing to build from otherwise), same
+    # "opt-in flag nested under a broader one" precedent as every prior
+    # Level 3/4/D-phase flag. Default False: a further, explicit opt-in
+    # even for a caller who already enabled boundary geometry.
+    #
+    # No separate opening_grid_rows/opening_grid_cols exists: opening
+    # evidence is always built on the SAME grid boundary_evidence itself
+    # used (boundary_grid_rows/boundary_grid_cols) — this is consuming
+    # boundary's own already-chosen grid, not an independent one, since
+    # opening inference is fundamentally built ON TOP of boundary
+    # evidence. Likewise, opening cells reuse boundary_min_support_count
+    # directly (the identical "enough valid depth pixels in a grid cell"
+    # question at the identical grid resolution) rather than introducing
+    # a redundant near-duplicate threshold.
+    enable_opening_geometry: bool = False
+
+    # A candidate opening span's own median depth must be at least this
+    # many times the farther of its confirmed flanking structures' own
+    # median depth — the check that structurally distinguishes a genuine
+    # receding gap from a near-side protrusion (an obstacle poking
+    # forward also produces a large |depth step|, but in the wrong
+    # direction). Must be > 1.0 (a ratio of exactly 1.0 would mean "same
+    # distance," not meaningfully farther). A policy choice, not a
+    # physical constant, same discipline as every other threshold in this
+    # file — not tuned against any real dataset.
+    opening_min_range_ratio: float = 1.5
+
+    # --- Phase D7: directional clearance refinement ---
+    # Consumed by fusion.result_builder.build_clearance_evidence() to
+    # classify each geometry.provider.ClearanceEvidence's own
+    # support_state (see geometry.provider.ClearanceSupportState's own
+    # docstring for the full SUPPORTED/PARTIALLY_SUPPORTED/NO_EVIDENCE
+    # split) — a beam that already cleared ThreatAssessor's own
+    # min_valid admission floor (has_evidence=True) is further split by
+    # this coverage_fraction threshold into SUPPORTED (trust it fully)
+    # vs. PARTIALLY_SUPPORTED (a real distance exists, but thinner
+    # support than this bar). No new flag needed — ClearanceEvidence is
+    # already unconditionally built whenever
+    # PipelineConfig.enable_geometry_frame is True, same as region_evidence.
+    # A policy choice, not a physical constant, same discipline as
+    # geometry_healthy_min_valid_fraction above — not tuned against any
+    # real dataset.
+    clearance_min_coverage_fraction: float = 0.5
+
+    # --- Phase D2: GeometryFrame provider contract ---
+    # Gates DepthPerceptionPipeline.process()'s construction of
+    # geometry.GeometryFrame (attached as DepthPerceptionResult.
+    # geometry_frame) — see docs/DPE_V1_PROVIDER_CONTRACT.md. Default
+    # False, same "opt-in, existing callers unaffected" discipline as
+    # every other enable_* flag in this file: False reproduces pre-D2
+    # behavior exactly — geometry_frame stays None, and no GeometryFrame
+    # is even constructed. When True, GeometryFrame is assembled purely
+    # by reading fields off the already-built DepthPerceptionResult (see
+    # fusion.result_builder.build_geometry_frame) — no new algorithm, no
+    # recomputation. No __post_init__ check is added below for this
+    # field, same reasoning as enable_geometry: a plain bool with no
+    # invalid value.
+    enable_geometry_frame: bool = False
+
     def resolved_obstacle_dead_zone_px(self) -> int:
         """obstacle_dead_zone_px if set, else num_disparities."""
         return (
@@ -449,4 +605,42 @@ class PipelineConfig:
                 "Require persistence_expiration_absence_frames > persistence_max_dropout_frames, got "
                 f"persistence_expiration_absence_frames={self.persistence_expiration_absence_frames}, "
                 f"persistence_max_dropout_frames={self.persistence_max_dropout_frames}."
+            )
+        if self.surface_grid_rows < 1 or self.surface_grid_cols < 1:
+            raise ValueError(
+                "surface_grid_rows/surface_grid_cols must both be at least 1, got "
+                f"rows={self.surface_grid_rows}, cols={self.surface_grid_cols}."
+            )
+        if self.surface_min_support_count < 3:
+            raise ValueError(
+                "surface_min_support_count "
+                f"({self.surface_min_support_count}) must be >= 3 — fewer than 3 "
+                "points cannot uniquely determine a plane."
+            )
+        if self.boundary_grid_rows < 1 or self.boundary_grid_cols < 1:
+            raise ValueError(
+                "boundary_grid_rows/boundary_grid_cols must both be at least 1, got "
+                f"rows={self.boundary_grid_rows}, cols={self.boundary_grid_cols}."
+            )
+        if self.boundary_min_support_count < 1:
+            raise ValueError(
+                f"boundary_min_support_count ({self.boundary_min_support_count}) must be >= 1."
+            )
+        if not (self.boundary_depth_step_threshold_m > 0.0):
+            raise ValueError(
+                f"boundary_depth_step_threshold_m ({self.boundary_depth_step_threshold_m}) must be > 0."
+            )
+        if not (0.0 < self.boundary_orientation_change_threshold_rad <= math.pi):
+            raise ValueError(
+                "boundary_orientation_change_threshold_rad "
+                f"({self.boundary_orientation_change_threshold_rad}) must be in (0, pi]."
+            )
+        if not (self.opening_min_range_ratio > 1.0):
+            raise ValueError(
+                f"opening_min_range_ratio ({self.opening_min_range_ratio}) must be > 1.0."
+            )
+        if not (0.0 <= self.clearance_min_coverage_fraction <= 1.0):
+            raise ValueError(
+                "clearance_min_coverage_fraction "
+                f"({self.clearance_min_coverage_fraction}) must be in [0, 1]."
             )
