@@ -22,6 +22,7 @@ scenario semantics without re-implementing the math).
 
 import dataclasses
 
+import cv2
 import numpy as np
 import pytest
 
@@ -55,11 +56,25 @@ def _quality(result, config):
     )
 
 
-def _random_pair(seed=42):
+def _random_pair(seed=42, shift_px=24):
+    """Genuinely-correlated smoothed-low-frequency-texture stereo pair with
+    a known fixed shift. Originally i.i.d. noise, relying on real SGBM's
+    smoothness prior to still report substantial (if false) valid disparity
+    from zero true correspondence — Phase I1 corrected `disparity_engine.py`'s
+    SGBM penalty terms specifically to stop that (see
+    benchmarks/i1_stereo_accuracy/), so i.i.d. noise no longer reliably
+    produces "substantial valid geometry" after that fix (the fix working
+    as intended). Uses the same technique already established by
+    tests/test_d10_black_box_provider.py / tests/test_d11_degradation_validation.py
+    for exactly this reason."""
     w, h = _CALIBRATION.image_size
+    canvas_w = w + shift_px
     rng = np.random.default_rng(seed)
-    left = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
-    right = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+    low_res = rng.integers(0, 255, (h // 4 + 2, canvas_w // 4 + 2), dtype=np.uint8)
+    canvas = cv2.resize(low_res, (canvas_w, h), interpolation=cv2.INTER_CUBIC)
+    canvas_bgr = np.stack([canvas] * 3, axis=-1)
+    left = canvas_bgr[:, 0:w].copy()
+    right = canvas_bgr[:, shift_px:shift_px + w].copy()
     return left, right
 
 
@@ -114,14 +129,25 @@ class TestC_ExtremelySparseValidDepth:
     fields."""
 
     def test_sparse_texture_patch_yields_small_nonzero_fraction(self):
+        # The patch needs a genuine, non-zero disparity: depth_estimator.py
+        # treats disparity<=0 as invalid by design (0 is the "no data"
+        # sentinel, not a legitimate zero-depth reading), so a patch pasted
+        # at the IDENTICAL pixel location in both eyes (zero true disparity)
+        # can never contribute valid depth regardless of how well SGBM
+        # matches it — that was true before Phase I1 too, it was just masked
+        # by real SGBM's (since-corrected) smoothness-prior over-permissiveness
+        # spuriously reporting a few nearby pixels as valid disparity. A real
+        # object at a real depth needs a real pixel shift between the two
+        # eyes — 15px here (~2.7m at this calibration's fx/baseline).
         w, h = _CALIBRATION.image_size
+        shift_px = 15
         rng = np.random.default_rng(3)
         left = np.full((h, w, 3), 128, dtype=np.uint8)
         right = np.full((h, w, 3), 128, dtype=np.uint8)
         patch = rng.integers(0, 255, (20, 20, 3), dtype=np.uint8)
         cy, cx = h // 2, w // 2
         left[cy - 10:cy + 10, cx - 10:cx + 10] = patch
-        right[cy - 10:cy + 10, cx - 10:cx + 10] = patch
+        right[cy - 10:cy + 10, cx - 10 - shift_px:cx + 10 - shift_px] = patch
 
         result = _pipeline().process(left, right)
 
@@ -258,9 +284,13 @@ class TestJ_TooFarDepth:
 class TestK_MixedValidInvalidGeometry:
     """A frame with both valid and invalid pixels.
 
-    Expected: obstacle_cloud/free_space_rays counts exactly equal the
-    valid pixel count — no more, no less; invalid pixels contribute
-    nothing to either."""
+    Expected: obstacle_cloud/free_space_rays counts never exceed the
+    valid pixel count — invalid pixels contribute nothing to either.
+    Phase I3 update: no longer an exact equality — a geometrically-
+    predicted occlusion/dis-occlusion shadow zone (see
+    geometry.reliability's module docstring) can additionally exclude
+    some nominally-valid-but-unreliable pixels from both outputs, always
+    symmetrically (see the explicit check below)."""
 
     def test_counts_exactly_match_valid_pixel_count(self):
         left, right = _random_pair()
@@ -270,8 +300,9 @@ class TestK_MixedValidInvalidGeometry:
         assert 0 < valid_count < result.geometry_body.valid_mask.size, (
             "fixture must be genuinely mixed for this test to be meaningful"
         )
-        assert result.obstacle_cloud.points.shape[0] == valid_count
-        assert result.free_space_rays.ranges_m.shape[0] == valid_count
+        assert result.obstacle_cloud.points.shape[0] <= valid_count
+        assert result.free_space_rays.ranges_m.shape[0] <= valid_count
+        assert result.obstacle_cloud.points.shape[0] == result.free_space_rays.ranges_m.shape[0]
 
 
 class TestL_EmptyGeometryAfterRangeFiltering:

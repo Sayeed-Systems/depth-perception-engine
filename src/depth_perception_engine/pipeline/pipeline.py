@@ -50,6 +50,7 @@ from depth_perception_engine.geometry.geometry_metrics import build_geometry_met
 from depth_perception_engine.geometry.obstacle_extractor import build_obstacle_cloud
 from depth_perception_engine.geometry.opening import build_opening_evidence
 from depth_perception_engine.geometry.point_cloud_builder import PointCloudBuilder
+from depth_perception_engine.geometry.reliability import compute_shadow_zone_mask, compute_ramp_zone_mask
 from depth_perception_engine.geometry.rigid_transform import transform_point_cloud
 from depth_perception_engine.geometry.surface import build_surface_evidence
 from depth_perception_engine.models.result import (
@@ -232,6 +233,7 @@ class DepthPerceptionPipeline:
             ema_alpha=config.obstacle_ema_alpha,
             debounce_frames=config.obstacle_debounce_frames,
             dead_zone_px=config.resolved_obstacle_dead_zone_px(),
+            contamination_threshold=config.clearance_shadow_zone_contamination_threshold,
         )
 
     # ------------------------------------------------------------------
@@ -353,6 +355,26 @@ class DepthPerceptionPipeline:
         )
         depth_map = self._depth_estimator.estimate(raw_disparity)
 
+        # Phase I3: local occlusion/dis-occlusion reliability mask — see
+        # geometry.reliability's module docstring. Computed once, from
+        # raw_disparity/valid_disparity_mask alone (before any Level 3/4
+        # stage runs), and threaded into the specific builders below
+        # whose own per-cell "support"/"confirmed" semantics a genuine
+        # occlusion shadow was found (benchmarks/i3_occlusion_safety/) to
+        # defeat — never used to redefine valid_disparity_mask/
+        # valid_depth_mask/PointCloud.valid_mask themselves, so Level 0-2
+        # and the E2-E5 chain's own existing tested invariants are
+        # unaffected. All-False (zero cost, zero effect) on any frame
+        # with no large disparity discontinuity anywhere.
+        shadow_zone_mask = None
+        if self._config.geometry_shadow_zone_enabled:
+            shadow_zone_mask = compute_shadow_zone_mask(
+                raw_disparity, raw_disparity > 0.0,
+                lookahead_px=self._config.geometry_shadow_zone_lookahead_px,
+                gradient_threshold_px=self._config.geometry_shadow_zone_gradient_threshold_px,
+                max_width_px=self._config.geometry_shadow_zone_max_width_px,
+            )
+
         # Level 3, Phase E3: camera-optical-frame 3D geometry, gated by
         # PipelineConfig.enable_geometry (self._point_cloud_builder is
         # None when disabled — see __init__). Fed from raw_disparity, the
@@ -429,6 +451,7 @@ class DepthPerceptionPipeline:
                     min_range_m=self._config.obstacle_min_range_m,
                     max_range_m=self._config.obstacle_max_range_m,
                     stride=self._config.geometry_sampling_stride,
+                    reliability_mask=shadow_zone_mask,
                 )
                 logger.debug(
                     "Obstacle-cloud stage: %.2f ms, %d points",
@@ -439,6 +462,7 @@ class DepthPerceptionPipeline:
                 rays_t0 = time.perf_counter()
                 free_space_rays = build_free_space_rays(
                     geometry_body, origin, stride=self._config.geometry_sampling_stride,
+                    reliability_mask=shadow_zone_mask,
                 )
                 logger.debug(
                     "Free-space-rays stage: %.2f ms, %d rays",
@@ -464,6 +488,7 @@ class DepthPerceptionPipeline:
                     grid_rows=self._config.surface_grid_rows,
                     grid_cols=self._config.surface_grid_cols,
                     min_support_count=self._config.surface_min_support_count,
+                    reliability_mask=shadow_zone_mask,
                 )
                 logger.debug(
                     "Surface-geometry stage: %.2f ms, %d cells",
@@ -495,6 +520,8 @@ class DepthPerceptionPipeline:
                 surface_evidence=surface_evidence,
                 surface_grid_rows=self._config.surface_grid_rows,
                 surface_grid_cols=self._config.surface_grid_cols,
+                reliability_mask=shadow_zone_mask,
+                min_confirmation_support_fraction=self._config.boundary_min_confirmation_support_fraction,
             )
             logger.debug(
                 "Boundary-geometry stage: %.2f ms, %d adjacencies",
@@ -522,6 +549,7 @@ class DepthPerceptionPipeline:
                 min_support_count=self._config.boundary_min_support_count,
                 min_range_ratio=self._config.opening_min_range_ratio,
                 focal_length_px=self._rectified_focal_length_px,
+                min_merge_depth_diff_m=self._config.opening_min_merge_depth_diff_m,
             )
             logger.debug(
                 "Opening-geometry stage: %.2f ms, %d openings",
@@ -532,8 +560,37 @@ class DepthPerceptionPipeline:
         decision = self._scene_interpreter.decide_navigation(regions)
         traversability = TraversabilityResult(regions=regions, decision=decision)
 
+        # Phase I6.3: clearance contamination gating combines TWO
+        # independent reliability signals — I6.2's shadow_zone_mask
+        # (narrow, geometrically-predicted occlusion strips) and the
+        # wide-ramp mask below (StereoSGBM's own smoothness-
+        # regularization radius, a distinct, wider, direction-agnostic
+        # contamination mechanism; see geometry.reliability.
+        # compute_ramp_zone_mask's own docstring for the full root-cause
+        # trace). Unioned into one mask, not two separate checks, so
+        # ThreatAssessor.assess()'s contamination test stays a single
+        # fraction-of-kept-population comparison. Neither signal is
+        # threaded into obstacle_cloud/free_space_rays/surface/boundary —
+        # only shadow_zone_mask is, unchanged from I3.
+        clearance_reliability_mask = (
+            shadow_zone_mask if self._config.clearance_shadow_zone_gating_enabled else None
+        )
+        if self._config.clearance_ramp_zone_gating_enabled:
+            ramp_zone_mask = compute_ramp_zone_mask(
+                raw_disparity, raw_disparity > 0.0,
+                window_px=self._config.clearance_ramp_zone_window_px,
+                gradient_threshold_px=self._config.clearance_ramp_zone_gradient_threshold_px,
+            )
+            clearance_reliability_mask = (
+                ramp_zone_mask if clearance_reliability_mask is None
+                else (clearance_reliability_mask | ramp_zone_mask)
+            )
+
         obstacles = to_obstacle_assessment(
-            self._threat_assessor.assess(depth_map, raw_disparity)
+            self._threat_assessor.assess(
+                depth_map, raw_disparity,
+                reliability_mask=clearance_reliability_mask,
+            )
         )
 
         # Level 4, Phase E2: bounded temporal-history admission, gated by

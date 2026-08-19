@@ -17,6 +17,8 @@ independent camera->body transform of its own. See docs/LEVEL3_ARCHITECTURE.md's
 E5 update for the full single-chain rationale.
 """
 
+from typing import Optional
+
 import numpy as np
 
 from depth_perception_engine.geometry.types import ObstacleCloud, PointCloud
@@ -28,6 +30,7 @@ def build_obstacle_cloud(
     min_range_m: float,
     max_range_m: float,
     stride: int = 1,
+    reliability_mask: Optional[np.ndarray] = None,
 ) -> ObstacleCloud:
     """Filter a PointCloud down to a compact, unorganized ObstacleCloud.
 
@@ -66,6 +69,13 @@ def build_obstacle_cloud(
         max_range_m: Inclusive upper bound on distance from `origin`.
         stride: Grid decimation factor, >= 1. 1 (default) keeps every
             pixel — no downsampling.
+        reliability_mask: Optional (H, W) bool, same organized grid as
+            `cloud` — Phase I3, see geometry.reliability's module
+            docstring. Where True, a pixel is EXCLUDED from the output
+            regardless of `cloud.valid_mask` — an additional, internal-
+            only reliability gate, never a redefinition of `valid_mask`
+            itself. None (default) preserves this function's exact
+            pre-I3 behavior (every existing test/caller unaffected).
 
     Returns:
         ObstacleCloud in `cloud.frame_id`: `points` (N, 3) float32,
@@ -88,6 +98,8 @@ def build_obstacle_cloud(
 
     points = cloud.points[::stride, ::stride]
     valid = cloud.valid_mask[::stride, ::stride]
+    if reliability_mask is not None:
+        valid = valid & ~reliability_mask[::stride, ::stride]
 
     # NaN-safe: invalid pixels are NaN, so distances there are NaN too;
     # NaN comparisons are always False, so they never satisfy the range

@@ -48,6 +48,7 @@ class ThreatAssessor:
         ema_alpha:             float = 0.30,
         debounce_frames:       int   = 3,
         dead_zone_px:          int   = 0,
+        contamination_threshold: float = 0.30,
     ) -> None:
         self._n_beams              = n_beams
         self._clear_m              = clear_m
@@ -58,6 +59,7 @@ class ThreatAssessor:
         self._ema_alpha             = ema_alpha
         self._debounce_frames       = debounce_frames
         self._dead_zone_px          = dead_zone_px
+        self._contamination_threshold = contamination_threshold
 
         # Per-beam temporal state — persists across assess() calls so
         # readings and overlay status stay stable frame-to-frame.
@@ -66,13 +68,40 @@ class ThreatAssessor:
         self._pending_status = [None] * n_beams
         self._pending_count  = [0] * n_beams
 
-    def assess(self, depth_map: np.ndarray, raw_disp: Optional[np.ndarray] = None) -> Dict:
+    def assess(
+        self,
+        depth_map: np.ndarray,
+        raw_disp: Optional[np.ndarray] = None,
+        reliability_mask: Optional[np.ndarray] = None,
+    ) -> Dict:
         """Scan depth_map in vertical beams and return navigability data.
 
         Args:
             depth_map: float32 (H, W) depth map in metres, zeros = invalid.
             raw_disp:  optional (H, W) raw disparity map used to detect
                        textureless obstacles that produce no depth at all.
+            reliability_mask: optional (H, W) bool, e.g.
+                       geometry.reliability.compute_shadow_zone_mask()'s
+                       output — the same shared occlusion-shadow signal
+                       already threaded into the Level 3/4 builders
+                       (build_obstacle_cloud/build_free_space_rays/
+                       build_surface_evidence/build_boundary_evidence).
+                       Phase I6.2: when the fraction of a beam's IQR-kept
+                       population (the exact pixels distance_m is derived
+                       from) flagged in this mask reaches
+                       contamination_threshold, that beam's dict gets
+                       "contaminated": True — distance_m/status are left
+                       as-is (never fabricated-corrected; I6.1 proved the
+                       true value is not reliably recoverable once SGBM
+                       has smeared a transition), but downstream
+                       (fusion.result_builder.build_clearance_evidence)
+                       uses the flag to downgrade an otherwise-SUPPORTED
+                       ClearanceEvidence sector to PARTIALLY_SUPPORTED
+                       rather than report confident-but-contaminated
+                       evidence as authoritative. None (default) disables
+                       this entirely — every beam reports
+                       "contaminated": False, byte-identical to pre-I6.2
+                       behavior.
 
         Returns:
             Dict with:
@@ -93,6 +122,14 @@ class ThreatAssessor:
                                    distance_m/status derivation at all.
                 total_pixels    — Phase D7: this beam column's total pixel
                                    count (`col.size`).
+                contaminated    — Phase I6.2: True iff reliability_mask was
+                                   supplied AND the fraction of this beam's
+                                   IQR-kept population flagged in it is >=
+                                   contamination_threshold. Always False
+                                   when reliability_mask is None. Does not
+                                   affect distance_m/status at all — purely
+                                   an additional signal for downstream
+                                   consumers (see build_clearance_evidence).
         """
         h, w = depth_map.shape[:2]
         beam_w = w / self._n_beams
@@ -107,7 +144,8 @@ class ThreatAssessor:
             # contiguous access pattern is measurably faster than applying
             # those operations directly to the strided 2-D view.
             col   = depth_map[:, x1:x2].flatten().astype(np.float32)
-            valid = col[(col > 0) & np.isfinite(col)]
+            valid_bool = (col > 0) & np.isfinite(col)
+            valid = col[valid_bool]
             # Snapshot BEFORE any IQR-filtering reassignment below —
             # `valid` itself is narrowed further inside the branch that
             # follows, but valid_count/total_pixels describe genuine
@@ -117,15 +155,34 @@ class ThreatAssessor:
             valid_count = int(valid.size)
             total_pixels = int(col.size)
 
+            # Phase I6.2: reliability-mask values for the exact same
+            # ordering/subset as `valid` (same boolean mask, same flatten
+            # order) — lets the IQR-kept check below test contamination of
+            # precisely the pixels d_m is computed from, not the whole
+            # column. None when no mask supplied (default, zero cost).
+            reliab_valid = (
+                reliability_mask[:, x1:x2].flatten()[valid_bool]
+                if reliability_mask is not None else None
+            )
+
+            contaminated = False
             if valid.size >= self._min_valid:
                 q1, q3 = np.percentile(valid, [25, 75])
                 iqr = q3 - q1
+                kept_bool = None
                 if iqr > 0:
-                    valid = valid[
+                    kept_bool = (
                         (valid >= q1 - 1.5 * iqr) &
                         (valid <= q3 + 1.5 * iqr)
-                    ]
+                    )
+                    valid = valid[kept_bool]
                 d_m = float(np.percentile(valid, self._percentile)) if valid.size >= self._min_valid else 0.0
+                if reliab_valid is not None and valid.size >= self._min_valid:
+                    kept_reliab = reliab_valid[kept_bool] if kept_bool is not None else reliab_valid
+                    contaminated = (
+                        kept_reliab.size > 0
+                        and float(kept_reliab.mean()) >= self._contamination_threshold
+                    )
             else:
                 d_m = 0.0
 
@@ -209,6 +266,7 @@ class ThreatAssessor:
                 "status":     self._stable_status[i],
                 "valid_count": valid_count,
                 "total_pixels": total_pixels,
+                "contaminated": contaminated,
             })
 
         valid_beams = [b for b in beams if b["status"] != self.NO_DATA]

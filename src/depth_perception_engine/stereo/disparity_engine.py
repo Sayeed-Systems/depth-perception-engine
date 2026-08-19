@@ -48,9 +48,18 @@ class DisparityEngine:
         self._num_disparities = num_disparities
         self._block_size = block_size
 
-        # P1 / P2 penalty terms — standard heuristic based on block size
-        p1 = 8 * 3 * block_size ** 2
-        p2 = 32 * 3 * block_size ** 2
+        # P1 / P2 penalty terms — OpenCV's standard heuristic is
+        # 8/32 * number_of_image_channels * block_size**2. compute_disparity()
+        # always calls self._stereo.compute() on grayscale (1-channel) frames
+        # (see _to_grayscale() below), so the channel count here is 1, not 3 —
+        # using 3 (the multi-channel/color figure) made the smoothness penalty
+        # 3x stronger than intended, over-smoothing disparity and (per Phase
+        # I1's offline benchmark, benchmarks/i1_stereo_accuracy/) letting
+        # StereoSGBM's smoothness prior report confident-looking disparity
+        # from totally decorrelated (no true correspondence) input far more
+        # often than the channel-correct penalty does.
+        p1 = 8 * 1 * block_size ** 2
+        p2 = 32 * 1 * block_size ** 2
 
         self._stereo = cv2.StereoSGBM_create(
             minDisparity=min_disparity,
@@ -59,7 +68,14 @@ class DisparityEngine:
             P1=p1,
             P2=p2,
             disp12MaxDiff=1,
-            uniquenessRatio=10,
+            # 20, not OpenCV's own sample default of 10 — Phase I1's offline
+            # sweep (benchmarks/i1_stereo_accuracy/) measured 10 as too
+            # permissive for this (now channel-correct) smoothness penalty:
+            # raising it to 20 cut the false-valid-disparity rate on
+            # decorrelated/no-correspondence input by a further ~86% relative
+            # (9.0% -> 1.3%) with zero measured cost to accuracy, valid
+            # coverage on real correspondence, or latency.
+            uniquenessRatio=20,
             speckleWindowSize=100,
             speckleRange=32,
             preFilterCap=63,

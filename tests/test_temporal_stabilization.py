@@ -20,6 +20,7 @@ import ast
 import dataclasses
 import inspect
 
+import cv2
 import numpy as np
 import pytest
 
@@ -35,6 +36,40 @@ from depth_perception_engine.temporal import (
     TemporalStabilizationState,
     compute_temporal_stabilization,
 )
+
+
+@pytest.fixture
+def stereo_pair(calibration):
+    """Overrides conftest.py's i.i.d.-noise `stereo_pair` for this file only
+    (module-scoped fixture override, standard pytest behavior — every other
+    test file keeps using conftest's original, unmodified fixture).
+
+    Phase I1 corrected `stereo/disparity_engine.py`'s SGBM smoothness penalty
+    (was 3x too strong for the grayscale-only input it actually receives)
+    and raised `uniquenessRatio`, specifically to stop StereoSGBM reporting
+    confident-looking disparity from i.i.d. noise that has zero true
+    correspondence (see benchmarks/i1_stereo_accuracy/,
+    docs/DPE_V1_PROVIDER_CONTRACT.md's D11 finding). That is the fix working
+    as intended, but it means conftest's raw i.i.d.-noise `stereo_pair` no
+    longer reliably produces enough genuinely-comparable geometry between
+    two calls to exercise this file's real subject (temporal
+    consistency/stabilization on real repeated observations) — it was never
+    testing real correspondence, only incidentally exploiting the
+    since-fixed over-smoothing bug. This uses the same smoothed-low-
+    frequency-texture, known-shift technique already established by
+    tests/test_d10_black_box_provider.py / tests/test_d11_degradation_validation.py
+    for exactly this reason, so the two processed frames share genuine,
+    decorrelation-free structure."""
+    width, height = calibration.image_size
+    shift_px = 24
+    canvas_w = width + shift_px
+    rng = np.random.default_rng(42)
+    low_res = rng.integers(0, 255, (height // 4 + 2, canvas_w // 4 + 2), dtype=np.uint8)
+    canvas = cv2.resize(low_res, (canvas_w, height), interpolation=cv2.INTER_CUBIC)
+    canvas_bgr = np.stack([canvas] * 3, axis=-1)
+    left = canvas_bgr[:, 0:width].copy()
+    right = canvas_bgr[:, shift_px:shift_px + width].copy()
+    return left, right
 
 
 def _snapshot(row):

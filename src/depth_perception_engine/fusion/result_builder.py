@@ -247,6 +247,19 @@ def build_clearance_evidence(
     calibration (focal_length_px/principal_point_x_px, the same
     Q-matrix-derived values rotation compensation and surface/boundary/
     opening geometry already use).
+
+    beam.contaminated (Phase I6.2): forces PARTIALLY_SUPPORTED even when
+    coverage_fraction would otherwise clear min_coverage_fraction — a
+    confirmed false-clear mechanism (a beam whose IQR-kept population sits
+    mostly inside a genuine occlusion shadow can still have high raw pixel
+    coverage; coverage_fraction alone cannot see that the AGGREGATED
+    distance came from a contaminated population). nearest_distance_m is
+    still reported (never withheld) — the point isn't to hide the number,
+    it's to stop asserting it as authoritative SUPPORTED evidence per the
+    explicit V1 principle that ambiguous geometry must read as ambiguous.
+    False (the default, when ThreatAssessor was never given a
+    reliability_mask) leaves this function's behavior byte-identical to
+    pre-I6.2.
     """
     evidence = []
     for beam in obstacles.beams:
@@ -255,6 +268,8 @@ def build_clearance_evidence(
 
         if not has_evidence:
             support_state = ClearanceSupportState.NO_EVIDENCE
+        elif beam.contaminated:
+            support_state = ClearanceSupportState.PARTIALLY_SUPPORTED
         elif coverage_fraction >= min_coverage_fraction:
             support_state = ClearanceSupportState.SUPPORTED
         else:

@@ -103,6 +103,15 @@ class BeamReading:
     BeamReading (bypassing ThreatAssessor.assess()) remains valid; every
     real beam ThreatAssessor itself produces always sets both explicitly.
     distance_m/status derivation is completely unchanged by this addition.
+
+    contaminated (Phase I6.2): True iff ThreatAssessor.assess() was given a
+    reliability_mask and this beam's IQR-kept population overlapped it at
+    or above contamination_threshold — a confirmed occlusion-shadow false-
+    clear mechanism (see fusion.result_builder.build_clearance_evidence,
+    which downgrades an otherwise-SUPPORTED ClearanceEvidence sector to
+    PARTIALLY_SUPPORTED when this is True). Defaulted to False for the
+    same pre-existing-construction-site backward-compatibility reason as
+    valid_count/total_pixels above.
     """
     index: int
     x1: int
@@ -111,6 +120,7 @@ class BeamReading:
     status: str  # ThreatAssessor.CLEAR / CAUTION / BLOCKED / NO_DATA
     valid_count: int = 0
     total_pixels: int = 0
+    contaminated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

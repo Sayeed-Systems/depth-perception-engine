@@ -124,6 +124,7 @@ class TestOutputsAbsentWhenDisabled:
 class TestDerivedFromBodyPointCloudOnly:
     def test_obstacle_cloud_matches_canonical_builder_called_directly(self, calibration, stereo_pair):
         from depth_perception_engine.geometry import build_obstacle_cloud
+        from depth_perception_engine.geometry.reliability import compute_shadow_zone_mask
 
         transform = _illustrative_transform()
         config = _full_e5_config()
@@ -132,10 +133,25 @@ class TestDerivedFromBodyPointCloudOnly:
 
         result = pipeline.process(left, right)
         origin = transform.translation
+        # Phase I3: the pipeline threads a shadow-zone reliability mask
+        # (computed from disparity_map alone) into the canonical builder
+        # — reproduce that exact same input here, or this "single
+        # canonical producer" proof would spuriously fail on any frame
+        # where the mask is non-trivial, not because a second, divergent
+        # implementation exists.
+        reliability_mask = None
+        if config.geometry_shadow_zone_enabled:
+            reliability_mask = compute_shadow_zone_mask(
+                result.disparity_map, result.disparity_map > 0.0,
+                lookahead_px=config.geometry_shadow_zone_lookahead_px,
+                gradient_threshold_px=config.geometry_shadow_zone_gradient_threshold_px,
+                max_width_px=config.geometry_shadow_zone_max_width_px,
+            )
         reference = build_obstacle_cloud(
             result.geometry_body, origin,
             min_range_m=config.obstacle_min_range_m, max_range_m=config.obstacle_max_range_m,
             stride=config.geometry_sampling_stride,
+            reliability_mask=reliability_mask,
         )
 
         np.testing.assert_array_equal(result.obstacle_cloud.points, reference.points)
@@ -143,6 +159,7 @@ class TestDerivedFromBodyPointCloudOnly:
 
     def test_free_space_rays_matches_canonical_builder_called_directly(self, calibration, stereo_pair):
         from depth_perception_engine.geometry import build_free_space_rays
+        from depth_perception_engine.geometry.reliability import compute_shadow_zone_mask
 
         transform = _illustrative_transform()
         config = _full_e5_config()
@@ -151,7 +168,20 @@ class TestDerivedFromBodyPointCloudOnly:
 
         result = pipeline.process(left, right)
         origin = transform.translation
-        reference = build_free_space_rays(result.geometry_body, origin, stride=config.geometry_sampling_stride)
+        # Phase I3: see the identical note in
+        # test_obstacle_cloud_matches_canonical_builder_called_directly.
+        reliability_mask = None
+        if config.geometry_shadow_zone_enabled:
+            reliability_mask = compute_shadow_zone_mask(
+                result.disparity_map, result.disparity_map > 0.0,
+                lookahead_px=config.geometry_shadow_zone_lookahead_px,
+                gradient_threshold_px=config.geometry_shadow_zone_gradient_threshold_px,
+                max_width_px=config.geometry_shadow_zone_max_width_px,
+            )
+        reference = build_free_space_rays(
+            result.geometry_body, origin, stride=config.geometry_sampling_stride,
+            reliability_mask=reliability_mask,
+        )
 
         np.testing.assert_array_equal(result.free_space_rays.ranges_m, reference.ranges_m)
         np.testing.assert_array_equal(result.free_space_rays.directions, reference.directions)
@@ -204,7 +234,20 @@ class TestUnknownSpaceSafetyRule:
     def test_invalid_pixel_count_equals_pixels_excluded_from_both_outputs(self, calibration, stereo_pair):
         """Every invalid pixel in geometry_body must be excluded from
         BOTH obstacle_cloud and free_space_rays — an invalid pixel can
-        contribute to neither."""
+        contribute to neither.
+
+        Phase I3 update: this no longer proves an exact equality against
+        valid_count. A geometrically-predicted occlusion/dis-occlusion
+        shadow zone (geometry.reliability.compute_shadow_zone_mask, see
+        its own module docstring and benchmarks/i3_occlusion_safety/) can
+        ADDITIONALLY exclude some nominally-valid-but-unreliable pixels
+        from both outputs — obstacle/ray counts can now be LESS than
+        valid_count, never more (that remains the absolute, safety-
+        critical direction: no invalid pixel can ever become an obstacle
+        or a ray). The two outputs must still shrink by exactly the SAME
+        amount, since both are built from the SAME reliability mask —
+        that symmetry (never "obstacle-excluded but still free" or vice
+        versa) is asserted explicitly below."""
         pipeline = DepthPerceptionPipeline(_full_e5_config(), calibration, body_T_camera_left=_illustrative_transform())
         left, right = stereo_pair
 
@@ -214,8 +257,12 @@ class TestUnknownSpaceSafetyRule:
         assert valid_count < result.geometry_body.valid_mask.size, (
             "fixture must contain at least one invalid pixel for this to be meaningful"
         )
-        assert result.obstacle_cloud.points.shape[0] == valid_count
-        assert result.free_space_rays.ranges_m.shape[0] == valid_count
+        assert result.obstacle_cloud.points.shape[0] <= valid_count
+        assert result.free_space_rays.ranges_m.shape[0] <= valid_count
+        assert result.obstacle_cloud.points.shape[0] == result.free_space_rays.ranges_m.shape[0], (
+            "obstacle_cloud and free_space_rays must be excluded symmetrically by any "
+            "reliability mask, never asymmetrically"
+        )
 
     def test_range_excluded_points_are_not_silently_reinterpreted_as_free(self, calibration, stereo_pair):
         """A point excluded from ObstacleCloud by a tight range window is

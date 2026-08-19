@@ -366,8 +366,12 @@ class TestNoBehavioralLeakage:
             assert not hasattr(opening_module, forbidden)
 
     def test_build_opening_evidence_signature_takes_no_platform_dimension_input(self):
+        # Phase I5.1 added `min_merge_depth_diff_m` — a span-assembly
+        # recalibration derived only from already-computed cell median
+        # depths (see geometry.opening's own docstring), not a platform
+        # dimension.
         params = set(inspect.signature(build_opening_evidence).parameters)
         assert params == {
             "boundary_evidence", "depth_map", "frame_id", "grid_rows", "grid_cols",
-            "min_support_count", "min_range_ratio", "focal_length_px",
+            "min_support_count", "min_range_ratio", "focal_length_px", "min_merge_depth_diff_m",
         }

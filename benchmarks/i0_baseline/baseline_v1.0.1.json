@@ -1,0 +1,159 @@
+{
+  "phase": "I0_BENCHMARK_BASELINE_FREEZE",
+  "dpe_version": "1.0.1",
+  "git_commit": "955e937b4656205178728d2d0f9b65b13ef826f6",
+  "generated_at_utc": "2026-08-13T02:26:52.090550+00:00",
+  "environment": {
+    "python_version": "3.13.14 (main, Jun 10 2026, 18:10:12) [GCC 15.2.0]",
+    "numpy_version": "2.5.1",
+    "opencv_version": "5.0.0",
+    "platform": "linux"
+  },
+  "metrics": {
+    "depth_errors_by_target": {
+      "near": {
+        "expected_depth_m": 1.0,
+        "measured_depth_m": 0.9999998807907104,
+        "abs_error_m": 1.1920928955078125e-07,
+        "valid_fraction": 1.0
+      },
+      "mid": {
+        "expected_depth_m": 3.0,
+        "measured_depth_m": 3.0,
+        "abs_error_m": 0.0,
+        "valid_fraction": 1.0
+      },
+      "far": {
+        "expected_depth_m": 8.0,
+        "measured_depth_m": 7.999999046325684,
+        "abs_error_m": 9.5367431640625e-07,
+        "valid_fraction": 1.0
+      }
+    },
+    "valid_fractions": {
+      "valid_fraction_healthy": {
+        "measured_valid_fraction": 1.0,
+        "expected_valid_fraction": 1.0,
+        "abs_error": 0.0
+      },
+      "valid_fraction_degraded": {
+        "measured_valid_fraction": 0.3,
+        "expected_valid_fraction": 0.3,
+        "abs_error": 0.0
+      },
+      "valid_fraction_insufficient": {
+        "measured_valid_fraction": 0.0,
+        "expected_valid_fraction": 0.0,
+        "abs_error": 0.0
+      }
+    },
+    "boundary_findings": {
+      "states_by_col": {
+        "0": "NO_DISCONTINUITY",
+        "1": "OBSERVED_DISCONTINUITY",
+        "2": "NO_DISCONTINUITY",
+        "3": "OBSERVED_DISCONTINUITY"
+      },
+      "depth_step_m_by_col": {
+        "0": 0.0,
+        "1": 4.0,
+        "2": 0.0,
+        "3": 4.0
+      },
+      "expected_discontinuity_cols": [
+        1,
+        3
+      ],
+      "expected_no_discontinuity_cols": [
+        0,
+        2
+      ],
+      "matches_expected": true
+    },
+    "opening_result": {
+      "n_openings": 1,
+      "col_span": [
+        2,
+        3
+      ],
+      "approx_range_m": 5.0,
+      "approx_width_m": 1.0414591897851584,
+      "expected_range_m": 5.0,
+      "expected_col_span": [
+        2,
+        3
+      ],
+      "range_abs_error_m": 0.0
+    },
+    "surface_normal": {
+      "expected_normal": [
+        0.25881904510252074,
+        0.0,
+        -0.9659258262890683
+      ],
+      "measured_normal": [
+        0.258819043636322,
+        -5.11715388622604e-15,
+        -0.9659258127212524
+      ],
+      "angular_error_rad": 0.00016422535698000165,
+      "planarity": 0.9999999999998462,
+      "support_count": 76800
+    },
+    "clearance_error": {
+      "measured_distance_m": 4.0,
+      "expected_distance_m": 4.0,
+      "distance_abs_error_m": 0.0,
+      "measured_bearing_center_rad": 0.02021673786459758,
+      "expected_bearing_center_rad": 0.02021673786459758,
+      "bearing_abs_error_rad": 0.0
+    },
+    "degradation_state": {
+      "valid_fraction_healthy": {
+        "measured_geometry_quality": "HEALTHY",
+        "expected_geometry_quality": "HEALTHY",
+        "measured_overall_state": "VALID",
+        "expected_overall_state": "VALID",
+        "degradation_reasons": []
+      },
+      "valid_fraction_degraded": {
+        "measured_geometry_quality": "DEGRADED",
+        "expected_geometry_quality": "DEGRADED",
+        "measured_overall_state": "DEGRADED",
+        "expected_overall_state": "DEGRADED",
+        "degradation_reasons": [
+          "GEOMETRY_VALIDITY:DEGRADED"
+        ]
+      },
+      "valid_fraction_insufficient": {
+        "measured_geometry_quality": "NO_USABLE_GEOMETRY",
+        "expected_geometry_quality": "NO_USABLE_GEOMETRY",
+        "measured_overall_state": "INSUFFICIENT",
+        "expected_overall_state": "INSUFFICIENT",
+        "degradation_reasons": [
+          "GEOMETRY_VALIDITY:INSUFFICIENT"
+        ]
+      }
+    },
+    "latency_fps": {
+      "resolution": "320x240",
+      "rectify": true,
+      "warmup": {
+        "n": 15,
+        "first_ms": 31.20610099995247,
+        "last_ms": 27.477728999656392
+      },
+      "steady_state": {
+        "mean_ms": 27.058080769993467,
+        "median_ms": 27.00213049956801,
+        "std_ms": 0.7492624426058785,
+        "p95_ms": 28.296231299964347,
+        "p99_ms": 29.418883009639103,
+        "max_ms": 29.60431100018468,
+        "min_ms": 25.787938000576105,
+        "fps_mean_based": 36.957536216277674,
+        "n": 100
+      }
+    }
+  }
+}

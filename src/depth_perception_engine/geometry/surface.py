@@ -115,6 +115,7 @@ def build_surface_evidence(
     grid_rows: int,
     grid_cols: int,
     min_support_count: int,
+    reliability_mask: Optional[np.ndarray] = None,
 ) -> List[SurfaceEvidence]:
     """Fit a local plane per grid cell over an existing organized PointCloud.
 
@@ -131,6 +132,14 @@ def build_surface_evidence(
         min_support_count: minimum valid points a cell must contain for a
             plane to be fit; must be >= 3 (fewer points cannot uniquely
             determine a plane).
+        reliability_mask: Optional (H, W) bool, same organized grid as
+            `cloud` — Phase I3, see geometry.reliability's module
+            docstring. Where True, a point is excluded from this cell's
+            plane fit — a confirmed occlusion-shadow point (a
+            geometrically-fabricated extension of an adjacent real
+            surface) must not contribute to that surface's own reported
+            normal/planarity. None (default) preserves this function's
+            exact pre-I3 behavior.
 
     Returns:
         A flat list of grid_rows * grid_cols SurfaceEvidence, one per
@@ -153,6 +162,10 @@ def build_surface_evidence(
     row_bounds = np.linspace(0, h, grid_rows + 1).astype(int)
     col_bounds = np.linspace(0, w, grid_cols + 1).astype(int)
 
+    effective_valid_mask = cloud.valid_mask
+    if reliability_mask is not None:
+        effective_valid_mask = effective_valid_mask & ~reliability_mask
+
     evidence: List[SurfaceEvidence] = []
     for r in range(grid_rows):
         y1, y2 = int(row_bounds[r]), int(row_bounds[r + 1])
@@ -160,7 +173,7 @@ def build_surface_evidence(
             x1, x2 = int(col_bounds[c]), int(col_bounds[c + 1])
 
             cell_points = cloud.points[y1:y2, x1:x2]
-            cell_valid = cloud.valid_mask[y1:y2, x1:x2]
+            cell_valid = effective_valid_mask[y1:y2, x1:x2]
             total_pixels = int(cell_valid.size)
 
             valid_points = cell_points[cell_valid].astype(np.float64)

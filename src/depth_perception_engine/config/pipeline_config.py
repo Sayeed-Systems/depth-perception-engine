@@ -24,7 +24,14 @@ class PipelineConfig:
     # --- stereo disparity (StereoSGBM) ---
     min_disparity: int = 0
     num_disparities: int = 128       # must be divisible by 16; ~0.31m-10m @ 64mm baseline
-    block_size: int = 13             # must be odd; larger = smoother disparity
+    # must be odd; larger = smoother disparity, but Phase I1's offline sweep
+    # (benchmarks/i1_stereo_accuracy/) measured 9 as a strict improvement over
+    # the previous default of 13 on the current (channel-correct P1/P2,
+    # uniquenessRatio=20) StereoDisparityEngine config: equal-or-lower
+    # disparity/depth error, equal-or-lower latency, and a further ~79%
+    # relative cut in false-valid disparity on decorrelated/no-correspondence
+    # input (1.3% -> 0.27%). 17/21 measured strictly worse on every axis.
+    block_size: int = 9
 
     # --- shared distance thresholds (obstacles + traversability) ---
     caution_distance_m: float = 0.60   # nearer than this: BLOCKED / OBSTACLE
@@ -109,6 +116,118 @@ class PipelineConfig:
     # valid_fraction < geometry_degraded_min_valid_fraction        -> NO_USABLE_GEOMETRY
     geometry_healthy_min_valid_fraction: float = 0.5
     geometry_degraded_min_valid_fraction: float = 0.05
+
+    # --- Phase I3: local occlusion/dis-occlusion reliability ---
+    # A confirmed, real false-authoritative-geometry mechanism (see
+    # benchmarks/i3_occlusion_safety/): a genuine occlusion strip
+    # adjacent to a real depth discontinuity can read as ~100% "valid"
+    # disparity (StereoSGBM's own smoothness-regularized cost aggregation
+    # extends the confidently-matched near surface's disparity across the
+    # ambiguous, no-true-correspondence region), which then enters
+    # obstacle_cloud/free_space_rays as ordinary unflagged points and can
+    # inflate BoundaryEvidence's per-cell support_fraction — all while
+    # GeometryFrameQuality.overall_state correctly reads VALID for the
+    # rest of the frame. geometry.reliability.compute_shadow_zone_mask()
+    # detects the geometrically-predictable shadow zone this creates
+    # (not a per-pixel statistical check — the fabricated values are
+    # numerically indistinguishable from genuine data; only the
+    # geometric PROXIMITY to a large disparity drop is detectable) and
+    # pipeline.py threads the result into build_obstacle_cloud/
+    # build_free_space_rays/build_boundary_evidence/build_surface_evidence
+    # as an additional, purely-internal exclusion — one shared mask
+    # rather than a separate heuristic per builder. On on any flat/
+    # single-plane/discontinuity-free scene this mask is empirically
+    # all-False (benchmarks/i1_stereo_accuracy/'s A/B/C fixtures, every
+    # depth) — zero effect on ordinary content, engages only near a
+    # genuine large depth step. Does NOT change valid_disparity_mask/
+    # valid_depth_mask/PointCloud.valid_mask's own frozen definition —
+    # Level 0-2 and the E2-E5 chain's existing tested invariants are
+    # unaffected.
+    geometry_shadow_zone_enabled: bool = True
+    geometry_shadow_zone_lookahead_px: int = 8
+    geometry_shadow_zone_gradient_threshold_px: float = 3.0
+    geometry_shadow_zone_max_width_px: int = 40
+
+    # --- Phase I6.2: clearance shadow-zone contamination gating ---
+    # A confirmed false-clear mechanism in ClearanceEvidence (an
+    # authoritative SUPPORTED sector reporting an obstacle farther/clearer
+    # than reality): ThreatAssessor.assess()'s IQR+percentile column
+    # aggregation was never threaded the same shadow_zone_mask already
+    # computed above for the Level 3/4 builders, so a beam whose IQR-kept
+    # population sits mostly inside a genuine occlusion shadow can still
+    # report SUPPORTED. Root-caused and measured directly
+    # (benchmarks/i5_surface_opening_clearance/clearance_rootcause/
+    # shadow_zone_gate_prototype.py, methodology_check.py): after fixing a
+    # separate benchmark-methodology bug that had inflated the apparent
+    # false-clear count from 4 to 28 (stale ThreatAssessor EMA/debounce
+    # state leaking across unrelated fixtures sharing one pipeline
+    # instance — see clearance/measure.py's own methodology-fix comment),
+    # the true false-clear population split into exactly two distinct root
+    # causes, only one of which this mechanism addresses: a genuine
+    # occlusion-shadow-contaminated beam (measured shadow-zone overlap
+    # 0.42-0.67 across all 3 narrow_obstacle seed/beam8 cases — comfortably
+    # above the 0.30 threshold below, giving real margin). The other known
+    # false-clear case (multi_zone beam13) is NOT caught by this gate —
+    # its contamination is a much wider (~20px) SGBM smoothness-
+    # regularization ramp, not classical occlusion-shadow geometry, and
+    # was measured to have exactly 0.0 shadow-zone overlap even with a
+    # mirrored/bidirectional shadow-zone check. That second mechanism is
+    # addressed separately by clearance_ramp_zone_gating_enabled below —
+    # this field alone does NOT close it.
+    #
+    # A beam whose IQR-kept population (the exact pixels distance_m is
+    # computed from) has shadow-zone overlap fraction >=
+    # clearance_shadow_zone_contamination_threshold is not corrected to a
+    # recovered value (I6.1's own contiguity/nearest-cluster prototypes
+    # both proved the true near-obstacle value is not reliably recoverable
+    # once SGBM has smeared it) — it is instead downgraded from SUPPORTED
+    # to PARTIALLY_SUPPORTED in fusion.result_builder.build_clearance_evidence,
+    # per the explicit V1 principle that ambiguous evidence must read as
+    # ambiguous rather than confidently wrong. 0.30 was chosen with real
+    # margin below every measured true-positive overlap (0.42-0.67) while
+    # keeping the conservative-downgrade cost on otherwise-correctly-
+    # reading nearby sectors small and concentrated only in genuinely
+    # transition-adjacent columns (~3.5%, 8/227 sectors in the qualified
+    # benchmark — shadow_zone_mask is empirically all-False on any
+    # discontinuity-free scene, so this cost cannot appear anywhere else).
+    clearance_shadow_zone_gating_enabled: bool = True
+    clearance_shadow_zone_contamination_threshold: float = 0.30
+
+    # --- Phase I6.3: clearance wide-ramp contamination gating ---
+    # Closes the second, distinct false-clear root cause the I6.2
+    # shadow-zone gate above cannot see: geometry.reliability.
+    # compute_ramp_zone_mask() detects a WIDE (measured ~20px),
+    # direction-agnostic disparity ramp — StereoSGBM's own smoothness-
+    # regularization radius spreading a strong step across many columns,
+    # not the narrow, geometrically-predicted occlusion strip
+    # compute_shadow_zone_mask models. Root-caused from a real depth
+    # profile trace across the known multi_zone false-clear sector
+    # (constant 3.98m, then a smooth, continuous ramp down to 2.49m
+    # across ~20 columns — not a sharp step with a narrow contaminated
+    # strip). A bidirectional/mirrored variant of the EXISTING shadow-zone
+    # mechanism still measured 0.0% overlap with this case — the problem
+    # is the width model, not direction, so a wider, direction-agnostic
+    # signal was needed (benchmarks/i5_surface_opening_clearance/
+    # clearance_rootcause/ramp_zone_gate_prototype.py). pipeline.py unions
+    # this mask with shadow_zone_mask (where both are enabled) into one
+    # combined reliability_mask before it reaches ThreatAssessor.assess()
+    # — same contamination -> PARTIALLY_SUPPORTED downgrade path as I6.2,
+    # not a new decision mechanism. window_px=24 was chosen to give real
+    # margin below every measured true-positive overlap (0.46-0.56, vs.
+    # first crossing the 0.30 contamination threshold at window_px=20);
+    # every "cost" sector at this setting was checked by hand and sits
+    # immediately adjacent to a genuine transition in its own fixture —
+    # none are spurious/scattered. Deliberately NOT threaded into
+    # build_obstacle_cloud/build_free_space_rays/build_surface_evidence/
+    # build_boundary_evidence — those keep their own separately-validated
+    # (I3/I4, 100% precision/recall) shadow_zone_mask-only behavior;
+    # widening their exclusion was never measured and is out of scope
+    # here. Reuses clearance_shadow_zone_contamination_threshold as its
+    # own contamination fraction threshold (same downgrade semantics, one
+    # threshold to reason about) rather than adding a second one.
+    clearance_ramp_zone_gating_enabled: bool = True
+    clearance_ramp_zone_window_px: int = 24
+    clearance_ramp_zone_gradient_threshold_px: float = 2.0
 
     # --- Level 4, Phase E2: bounded temporal history ---
     # Gates DepthPerceptionPipeline's temporal.TemporalHistory buffer.
@@ -379,6 +498,54 @@ class PipelineConfig:
     # angles. A policy choice, not tuned against any dataset.
     boundary_orientation_change_threshold_rad: float = 0.5236  # ~30 degrees
 
+    # --- Phase I4: boundary confirmation support floor ---
+    # A DIFFERENT check from boundary_min_support_count above: that one
+    # gates whether a cell has enough pixels to compute a median AT ALL;
+    # this one gates whether a cell has enough FRACTIONAL support to
+    # trust a POSITIVE OBSERVED_DISCONTINUITY finding derived from it.
+    # Calibrated against measured data (benchmarks/i4_boundary_precision/):
+    # 60+ decorrelated-noise seeds produced confirmed-pair support
+    # fractions no higher than ~0.027; 126 genuine-boundary cases across
+    # strong/weak/distant/narrow-obstacle/occluded/weak-texture fixtures
+    # never went below ~0.44 — a >16x gap. 0.10 sits with wide margin on
+    # both sides — a policy choice within that measured gap, not a value
+    # fit to any single scenario. Either cell below this fraction routes
+    # the pair to INSUFFICIENT_EVIDENCE, never OBSERVED_DISCONTINUITY —
+    # see geometry.boundary.build_boundary_evidence's own docstring.
+    boundary_min_confirmation_support_fraction: float = 0.10
+
+    # --- Phase I5 finding, deliberately NOT acted on — see below ---
+    # A grid cell whose bbox happens to fall exactly at a genuine
+    # scene-depth transition can fit a spuriously-oriented normal (SGBM
+    # smooths the true step over a few pixels, bleeding a thin sliver of
+    # the other side's depth into the "pure" cell) while depth_step_m
+    # against its true, same-depth neighbor comes out bit-exact 0.0 —
+    # producing a spurious ORIENTATION-based OBSERVED_DISCONTINUITY that
+    # can fragment a real, well-supported opening
+    # (benchmarks/i5_surface_opening_clearance/opening/'s
+    # "width_medium_2cell" finding). TWO candidate admission-logic gates
+    # were built and measured, and BOTH were rejected after full
+    # regression testing, not shipped:
+    #   (a) gate orientation on SurfaceEvidence.planarity — rejected:
+    #       planarity also degrades on GENUINE subtle transitions (a real
+    #       5m/6m boundary measured planarity ~0.90, indistinguishable
+    #       from the spurious case's ~0.885), suppressing real
+    #       weak/distant boundaries (measured I4 boundary-benchmark
+    #       recall regression: 100% -> 83.3%).
+    #   (b) gate orientation on depth_step_m exceeding a small floor —
+    #       rejected: this contradicts the orientation signal's own
+    #       documented, TESTED purpose (a real corner at the SAME depth
+    #       but different orientation, depth_step_m genuinely ~0.0 by
+    #       design — tests/test_boundary_geometry.py::
+    #       test_perpendicular_normals_with_zero_depth_step_is_observed);
+    #       measured to break that exact test plus a large recall
+    #       regression on real strong-step/occluded fixtures.
+    # No safe fix was found this phase. Left as a documented, open, NOT
+    # blocking-by-default limitation — see docs/RELEASE_NOTES_V1.md-style
+    # caveat treatment; do not attempt a third gate without first finding
+    # a signal that demonstrably separates the two cases (neither
+    # planarity nor depth_step_m does, per the above).
+
     # --- Phase D6: geometric openings / passage structure ---
     # Gates DepthPerceptionPipeline's opening-inference stage
     # (geometry.opening.build_opening_evidence) — see
@@ -411,6 +578,23 @@ class PipelineConfig:
     # physical constant, same discipline as every other threshold in this
     # file — not tuned against any real dataset.
     opening_min_range_ratio: float = 1.5
+
+    # --- Phase I5.1: opening span-assembly recalibration ---
+    # A confirmed RIGHT-edge OBSERVED_DISCONTINUITY between two cells
+    # whose own median depths agree within this tolerance is treated as a
+    # spurious internal split (SGBM step-smoothing bleed at a grid-cell
+    # boundary, not a real feature), not a real flank — see
+    # geometry.opening.build_opening_evidence's own docstring for the
+    # measured root cause and benchmarks/i5_surface_opening_clearance/
+    # opening_rootcause/ for the evidence (offline candidate search:
+    # precision 100%, recall 54.5% -> 90.9% on the I5 opening benchmark,
+    # measured insensitive across 0.01-0.10m). This is a pure
+    # span-assembly recalibration in geometry.opening — it does not touch
+    # geometry.boundary's own ORIENTATION-signal admission logic (two
+    # earlier attempts to gate that directly, on SurfaceEvidence.planarity
+    # and on depth_step_m, were each measured to regress genuine boundary
+    # recall and are not used).
+    opening_min_merge_depth_diff_m: float = 0.05
 
     # --- Phase D7: directional clearance refinement ---
     # Consumed by fusion.result_builder.build_clearance_evidence() to
@@ -542,6 +726,33 @@ class PipelineConfig:
                 f"geometry_degraded_min_valid_fraction={self.geometry_degraded_min_valid_fraction}, "
                 f"geometry_healthy_min_valid_fraction={self.geometry_healthy_min_valid_fraction}."
             )
+        if self.geometry_shadow_zone_lookahead_px < 1:
+            raise ValueError(
+                f"geometry_shadow_zone_lookahead_px ({self.geometry_shadow_zone_lookahead_px}) must be >= 1."
+            )
+        if self.geometry_shadow_zone_gradient_threshold_px <= 0.0:
+            raise ValueError(
+                "geometry_shadow_zone_gradient_threshold_px "
+                f"({self.geometry_shadow_zone_gradient_threshold_px}) must be > 0."
+            )
+        if self.geometry_shadow_zone_max_width_px < 1:
+            raise ValueError(
+                f"geometry_shadow_zone_max_width_px ({self.geometry_shadow_zone_max_width_px}) must be >= 1."
+            )
+        if not (0.0 <= self.clearance_shadow_zone_contamination_threshold <= 1.0):
+            raise ValueError(
+                "clearance_shadow_zone_contamination_threshold "
+                f"({self.clearance_shadow_zone_contamination_threshold}) must be in [0, 1]."
+            )
+        if self.clearance_ramp_zone_window_px < 1:
+            raise ValueError(
+                f"clearance_ramp_zone_window_px ({self.clearance_ramp_zone_window_px}) must be >= 1."
+            )
+        if self.clearance_ramp_zone_gradient_threshold_px <= 0.0:
+            raise ValueError(
+                "clearance_ramp_zone_gradient_threshold_px "
+                f"({self.clearance_ramp_zone_gradient_threshold_px}) must be > 0."
+            )
         if self.temporal_max_records < 1:
             raise ValueError(
                 f"temporal_max_records ({self.temporal_max_records}) must be >= 1."
@@ -635,9 +846,19 @@ class PipelineConfig:
                 "boundary_orientation_change_threshold_rad "
                 f"({self.boundary_orientation_change_threshold_rad}) must be in (0, pi]."
             )
+        if not (0.0 <= self.boundary_min_confirmation_support_fraction <= 1.0):
+            raise ValueError(
+                "boundary_min_confirmation_support_fraction "
+                f"({self.boundary_min_confirmation_support_fraction}) must be in [0, 1]."
+            )
         if not (self.opening_min_range_ratio > 1.0):
             raise ValueError(
                 f"opening_min_range_ratio ({self.opening_min_range_ratio}) must be > 1.0."
+            )
+        if self.opening_min_merge_depth_diff_m < 0.0:
+            raise ValueError(
+                "opening_min_merge_depth_diff_m "
+                f"({self.opening_min_merge_depth_diff_m}) must be >= 0."
             )
         if not (0.0 <= self.clearance_min_coverage_fraction <= 1.0):
             raise ValueError(

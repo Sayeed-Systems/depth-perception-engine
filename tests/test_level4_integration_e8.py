@@ -32,6 +32,7 @@ Three synthetic stereo-pair generators, reused across this file:
                            appears" input this file needs.
 """
 
+import cv2
 import numpy as np
 import pytest
 
@@ -75,10 +76,28 @@ def _pipeline(**config_overrides):
     return DepthPerceptionPipeline(_full_config(**config_overrides), _CALIBRATION, body_T_camera_left=_transform())
 
 
-def _random_pair(seed=42):
+def _random_pair(seed=42, shift_px=24):
+    """Genuinely-correlated smoothed-low-frequency-texture stereo pair with
+    a known fixed shift — NOT i.i.d. noise. Originally this was independent
+    i.i.d. noise for left/right, relying on real SGBM's smoothness prior to
+    still report substantial (if false) valid disparity from zero true
+    correspondence. Phase I1 corrected `disparity_engine.py`'s SGBM penalty
+    terms specifically to stop that — i.i.d. noise no longer reliably
+    produces "substantial valid geometry" after that fix (the fix working
+    as intended, see benchmarks/i1_stereo_accuracy/), so this now uses the
+    same smoothed-low-frequency-texture, known-shift technique already
+    established by tests/test_d10_black_box_provider.py /
+    tests/test_d11_degradation_validation.py for exactly this reason —
+    genuine, decorrelation-free correspondence, still deterministic and
+    seed-varied, still distinct from `_flat_pair()`'s zero-texture case and
+    `_patch_pair()`'s small-isolated-texture case this file also needs."""
+    canvas_w = _W + shift_px
     rng = np.random.default_rng(seed)
-    left = rng.integers(0, 255, (_H, _W, 3), dtype=np.uint8)
-    right = rng.integers(0, 255, (_H, _W, 3), dtype=np.uint8)
+    low_res = rng.integers(0, 255, (_H // 4 + 2, canvas_w // 4 + 2), dtype=np.uint8)
+    canvas = cv2.resize(low_res, (canvas_w, _H), interpolation=cv2.INTER_CUBIC)
+    canvas_bgr = np.stack([canvas] * 3, axis=-1)
+    left = canvas_bgr[:, 0:_W].copy()
+    right = canvas_bgr[:, shift_px:shift_px + _W].copy()
     return left, right
 
 

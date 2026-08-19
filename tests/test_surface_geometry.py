@@ -355,8 +355,12 @@ class TestNoBehavioralLeakage:
 
     def test_build_surface_evidence_signature_takes_no_traversability_or_obstacle_input(self):
         # SurfaceEvidence must be fully derivable from a PointCloud +
-        # viewpoint + grid config alone — no traversability.RegionStats/
+        # viewpoint + grid config (+ Phase I3's internal reliability
+        # mask, itself derived only from disparity — see
+        # geometry.reliability) alone — no traversability.RegionStats/
         # RegionClass or obstacles.BeamReading/ThreatAssessor input path
         # exists for it to read from.
         params = set(inspect.signature(build_surface_evidence).parameters)
-        assert params == {"cloud", "viewpoint", "grid_rows", "grid_cols", "min_support_count"}
+        assert params == {
+            "cloud", "viewpoint", "grid_rows", "grid_cols", "min_support_count", "reliability_mask",
+        }

@@ -29,12 +29,19 @@ identical "no recomputation, no parallel geometry chain" rationale, which
 applies here unchanged.
 """
 
+from typing import Optional
+
 import numpy as np
 
 from depth_perception_engine.geometry.types import FreeSpaceRays, PointCloud
 
 
-def build_free_space_rays(cloud: PointCloud, origin: np.ndarray, stride: int = 1) -> FreeSpaceRays:
+def build_free_space_rays(
+    cloud: PointCloud,
+    origin: np.ndarray,
+    stride: int = 1,
+    reliability_mask: Optional[np.ndarray] = None,
+) -> FreeSpaceRays:
     """Build FreeSpaceRays from a PointCloud's valid points.
 
     For every valid pixel (after `stride` decimation), one ray is
@@ -69,6 +76,15 @@ def build_free_space_rays(cloud: PointCloud, origin: np.ndarray, stride: int = 1
             obstacle_extractor.build_obstacle_cloud's identical
             `stride` semantics (2D grid decimation, not a count-based
             sample of the valid subset).
+        reliability_mask: Optional (H, W) bool — see
+            obstacle_extractor.build_obstacle_cloud's identical
+            parameter. Applying the SAME mask to both builders is
+            deliberate: a pixel excluded here must also be excluded from
+            build_obstacle_cloud, and vice versa — the point stays
+            UNKNOWN (neither confirmed obstacle nor confirmed free
+            space), never asymmetrically "not an obstacle, so implicitly
+            free." None (default) preserves this function's exact
+            pre-I3 behavior.
 
     Returns:
         FreeSpaceRays in `cloud.frame_id`: `origins` (N, 3) float32 (every
@@ -85,6 +101,8 @@ def build_free_space_rays(cloud: PointCloud, origin: np.ndarray, stride: int = 1
 
     points = cloud.points[::stride, ::stride]
     valid = cloud.valid_mask[::stride, ::stride]
+    if reliability_mask is not None:
+        valid = valid & ~reliability_mask[::stride, ::stride]
 
     offsets = points - origin
     ranges = np.linalg.norm(offsets, axis=-1)

@@ -132,16 +132,38 @@ class TestSevereDecorrelatedNoiseFalsePositiveSafety:
         print(f"\n[D11] decorrelated-noise SurfaceEvidence.planarity, mean per seed: {planarities_by_seed}")
 
         # This assertion documents the FINDING, it does not endorse it as
-        # correct behavior: planarity stays implausibly high (>0.9) on
-        # noise-derived surfaces in every seed tested. If a future
-        # corrective phase adds an upstream garbage-frame/texture gate,
-        # this assertion is expected to start FAILING — that would be
-        # the fix working, not a regression to silently loosen.
+        # correct behavior. UPDATE (Phase I1, stereo/disparity frontend
+        # fix): correcting disparity_engine.py's SGBM smoothness-penalty
+        # channel multiplier and raising uniquenessRatio (see
+        # benchmarks/i1_stereo_accuracy/) cut the volume of false-valid
+        # disparity on this exact decorrelated-noise input by ~97% (mean
+        # false_valid_fraction across 5 seeds: 0.418 -> ~0.01-0.03,
+        # benchmarks/i1_stereo_accuracy/results/baseline_current.json vs.
+        # sweep.json's "1_P1P2_FIXED"/"9_P1P2fixed_UR20" candidates) — a
+        # real, large, measured improvement to the underlying safety
+        # property (invalid/no-correspondence input no longer becomes
+        # trustworthy-looking geometry at anywhere near the old rate).
+        # It did NOT fully close this specific finding, though: the much
+        # smaller set of points that still survive can still fit a
+        # deceptively high-planarity plane in most (not all) seeds —
+        # measured range dropped from "5/5 seeds > 0.9" to
+        # "4/5 seeds > 0.9, one seed 0.85" (still all > 0.8). This is
+        # exactly the outcome docs/PUBLIC_API.md's/RELEASE_NOTES_V1.md's
+        # standing caveat already describes: SurfaceEvidence remains
+        # advisory under low-texture/decorrelated stereo and must not
+        # alone be treated as authoritative — a genuinely new-algorithm
+        # fix (e.g. a robust/outlier-aware plane fit, or wiring
+        # looks_like_garbage_frame() upstream of geometry) would be
+        # needed to close it further, and is explicitly out of Phase I1's
+        # stereo-frontend-only scope (see IA0's ranked improvement plan).
+        # If a FUTURE corrective phase closes this the rest of the way,
+        # this assertion is expected to start failing — that would be the
+        # fix working further, not a regression to silently loosen.
         assert len(planarities_by_seed) >= 3, "fixture did not reliably produce surface evidence to evaluate"
-        assert all(p > 0.9 for p in planarities_by_seed), (
-            "expected the known finding (implausibly high planarity on pure noise) to reproduce; "
-            f"got {planarities_by_seed} — if this now fails, the false-positive was fixed upstream, "
-            "not a new regression"
+        assert all(p > 0.8 for p in planarities_by_seed), (
+            "expected the known finding (implausibly high planarity on pure noise) to still substantially "
+            f"reproduce even after Phase I1's stereo-frontend fix; got {planarities_by_seed} — if this now "
+            "fails, the false-positive was fixed further upstream, not a new regression"
         )
 
     def test_decorrelated_noise_quality_is_measurably_worse_than_a_real_scene(self, capsys):

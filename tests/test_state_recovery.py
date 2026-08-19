@@ -15,6 +15,7 @@ following healthy frame is unaffected by having processed an invalid one
 in between.
 """
 
+import cv2
 import numpy as np
 
 from depth_perception_engine import DepthPerceptionPipeline, PipelineConfig, load_stereo_calibration
@@ -34,11 +35,24 @@ def _full_config():
     return PipelineConfig(enable_geometry=True, enable_obstacle_geometry=True, enable_free_space_rays=True)
 
 
-def _healthy_pair(seed=11):
+def _healthy_pair(seed=11, shift_px=24):
+    """Genuinely-correlated smoothed-low-frequency-texture stereo pair with
+    a known fixed shift. Originally i.i.d. noise, relying on real SGBM's
+    smoothness prior to still report substantial (if false) valid disparity
+    from zero true correspondence — Phase I1 corrected `disparity_engine.py`'s
+    SGBM penalty terms specifically to stop that (see
+    benchmarks/i1_stereo_accuracy/), so i.i.d. noise no longer reliably
+    reads as "healthy" after that fix. Uses the same technique already
+    established by tests/test_d10_black_box_provider.py /
+    tests/test_d11_degradation_validation.py for exactly this reason."""
     w, h = _CALIBRATION.image_size
+    canvas_w = w + shift_px
     rng = np.random.default_rng(seed)
-    left = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
-    right = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+    low_res = rng.integers(0, 255, (h // 4 + 2, canvas_w // 4 + 2), dtype=np.uint8)
+    canvas = cv2.resize(low_res, (canvas_w, h), interpolation=cv2.INTER_CUBIC)
+    canvas_bgr = np.stack([canvas] * 3, axis=-1)
+    left = canvas_bgr[:, 0:w].copy()
+    right = canvas_bgr[:, shift_px:shift_px + w].copy()
     return left, right
 
 

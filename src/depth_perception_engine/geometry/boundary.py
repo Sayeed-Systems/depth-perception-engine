@@ -149,6 +149,8 @@ def build_boundary_evidence(
     surface_evidence: Optional[List[SurfaceEvidence]] = None,
     surface_grid_rows: Optional[int] = None,
     surface_grid_cols: Optional[int] = None,
+    reliability_mask: Optional[np.ndarray] = None,
+    min_confirmation_support_fraction: float = 0.0,
 ) -> List[BoundaryEvidence]:
     """Evaluate depth/surface-orientation discontinuities between every
     pair of horizontally/vertically adjacent cells of a grid_rows x
@@ -177,7 +179,31 @@ def build_boundary_evidence(
             was built with. Orientation evidence is only consulted when
             these exactly equal grid_rows/grid_cols — see "Grid
             independence" in the module docstring.
-
+        reliability_mask: Optional (H, W) bool, same grid as `depth_map`
+            — Phase I3, see geometry.reliability's module docstring.
+            Where True, a pixel is excluded from its cell's own
+            support_count/support_fraction/median_depth_m — a confirmed
+            occlusion-shadow pixel must not inflate a cell's reported
+            support or bias its median toward fabricated content. This
+            does not redefine `depth_map > 0.0` validity itself, only
+            what counts as SUPPORT for this stage's own per-cell
+            aggregation. None (default) preserves this function's exact
+            pre-I3 behavior.
+        min_confirmation_support_fraction: Phase I4 (see
+            benchmarks/i4_boundary_precision/ — 60+ decorrelated-noise
+            seeds measured a false-confirmed-pair support_fraction
+            ceiling of ~0.027; 126 genuine-boundary cases across strong/
+            weak/distant/narrow/occluded/weak-texture fixtures measured a
+            floor of ~0.44 — a >16x gap, zero overlap). Either cell's
+            support_fraction below this value routes the pair to
+            INSUFFICIENT_EVIDENCE regardless of depth_step/orientation —
+            "enough valid pixels to compute a median" (the pre-existing
+            min_support_count floor) is not the same claim as "enough to
+            trust a POSITIVE discontinuity finding from it." Default 0.0
+            preserves this function's exact pre-I4 behavior for any
+            caller not passing it; pipeline.py supplies
+            PipelineConfig.boundary_min_confirmation_support_fraction
+            (default 0.10) for the real pipeline.
     Returns:
         A flat list covering every RIGHT edge (grid_rows * (grid_cols - 1)
         of them) followed by every DOWN edge (grid_cols * (grid_rows - 1)
@@ -197,6 +223,8 @@ def build_boundary_evidence(
         raise ValueError(f"depth_step_threshold_m ({depth_step_threshold_m}) must be > 0.")
 
     valid_depth_mask = depth_map > 0.0
+    if reliability_mask is not None:
+        valid_depth_mask = valid_depth_mask & ~reliability_mask
 
     h, w = depth_map.shape[:2]
     row_bounds = np.linspace(0, h, grid_rows + 1).astype(int)
@@ -249,7 +277,20 @@ def build_boundary_evidence(
                 x1, y1 = min(a["x1"], b["x1"]), min(a["y1"], b["y1"])
                 x2, y2 = max(a["x2"], b["x2"]), max(a["y2"], b["y2"])
 
-                if a["median_depth_m"] is None or b["median_depth_m"] is None:
+                # Phase I4: a fractional-support floor, IN ADDITION TO the
+                # absolute min_support_count check just below — "enough
+                # pixels to compute a median at all" is a weaker claim
+                # than "enough of the cell is genuinely explained to
+                # trust a POSITIVE discontinuity finding from it." See
+                # this function's own docstring and
+                # benchmarks/i4_boundary_precision/ for the measured
+                # separation this threshold is calibrated against.
+                insufficient = (
+                    a["median_depth_m"] is None or b["median_depth_m"] is None
+                    or a["support_fraction"] < min_confirmation_support_fraction
+                    or b["support_fraction"] < min_confirmation_support_fraction
+                )
+                if insufficient:
                     evidence.append(BoundaryEvidence(
                         frame_id=frame_id, row=r, col=c, direction=direction,
                         x1=x1, y1=y1, x2=x2, y2=y2,

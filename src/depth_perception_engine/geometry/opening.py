@@ -150,6 +150,7 @@ def build_opening_evidence(
     min_support_count: int,
     min_range_ratio: float,
     focal_length_px: float,
+    min_merge_depth_diff_m: float = 0.0,
 ) -> List[OpeningEvidence]:
     """Detect horizontal opening candidates per row of a grid_rows x
     grid_cols partition of depth_map, using already-computed
@@ -175,6 +176,32 @@ def build_opening_evidence(
         focal_length_px: calibration-derived focal length (pixels), used
             only for the explicitly-approximate width/height
             back-projection described in the module docstring.
+        min_merge_depth_diff_m: Phase I5.1 (see
+            benchmarks/i5_surface_opening_clearance/opening_rootcause/).
+            A confirmed RIGHT-edge OBSERVED_DISCONTINUITY is treated as a
+            real internal split only if its two flanking cells' own
+            median depths differ by MORE than this value — measured root
+            cause: a grid cell exactly at a genuine scene-depth
+            transition can catch a thin sliver of the other side's depth
+            (SGBM's own step-smoothing) and fit a spuriously-oriented
+            normal, confirming OBSERVED_DISCONTINUITY between two cells
+            whose median depth is (near-)identical, which otherwise
+            fragments a genuine multi-cell-wide opening into pieces that
+            each fail min_range_ratio against the other (now
+            misclassified as a flank reference). This is a span-assembly
+            recalibration, not a change to `geometry.boundary`'s own
+            admission logic (two earlier attempts to gate the
+            ORIENTATION signal itself — on SurfaceEvidence.planarity, and
+            on depth_step_m — were each measured to regress genuine
+            boundary recall and are NOT used here; see this module's own
+            git history / DPE_V1_PROVIDER_CONTRACT record for that
+            account). Measured insensitive across 0.01-0.10m; default
+            0.0 preserves this function's exact pre-I5.1 behavior for
+            any caller not passing it; pipeline.py supplies
+            PipelineConfig.opening_min_merge_depth_diff_m (default 0.05)
+            for the real pipeline. A `None`-median cell is never merged
+            across (see the dead-zone hard-split logic below, unrelated
+            to this parameter).
 
     Returns:
         A flat list of confirmed OpeningEvidence — empty when nothing
@@ -229,11 +256,45 @@ def build_opening_evidence(
 
     evidence: List[OpeningEvidence] = []
     for r in range(grid_rows):
-        flank_edges = [
+        # Phase I5.1: a real flank edge is a confirmed OBSERVED_DISCONTINUITY
+        # whose two flanking cells' own median depths genuinely differ by
+        # more than min_merge_depth_diff_m — see this function's own
+        # docstring for the measured spurious-split root cause this
+        # excludes. (OBSERVED_DISCONTINUITY already implies both medians
+        # are non-None, per geometry.boundary's own admission logic.)
+        flank_edges = []
+        for e in range(grid_cols - 1):
+            if right_state.get((r, e)) != BoundaryState.OBSERVED_DISCONTINUITY:
+                continue
+            left_median = cells[r][e]["median_depth_m"]
+            right_median = cells[r][e + 1]["median_depth_m"]
+            if (
+                left_median is not None and right_median is not None
+                and abs(left_median - right_median) <= min_merge_depth_diff_m
+            ):
+                continue
+            flank_edges.append(e)
+
+        # Phase I5.1: an edge adjacent to a None-median (structurally
+        # unobservable / insufficient-support) cell can never be safely
+        # bridged by a span (span_cells below rejects any span containing
+        # a None cell) — without an explicit split point there, the WHOLE
+        # span between the nearest real flanks is discarded even when the
+        # unobservable portion is a small, avoidable fraction of it.
+        # These are ARTIFICIAL (non-real) split points — never a
+        # confirmed flank, only a place a span may not cross — disjoint
+        # from flank_edges by construction (OBSERVED_DISCONTINUITY already
+        # implies both medians non-None).
+        hard_splits = {
             e for e in range(grid_cols - 1)
-            if right_state.get((r, e)) == BoundaryState.OBSERVED_DISCONTINUITY
-        ]
-        boundaries = [(-1, False)] + [(e, True) for e in flank_edges] + [(grid_cols - 1, False)]
+            if cells[r][e]["median_depth_m"] is None or cells[r][e + 1]["median_depth_m"] is None
+        }
+
+        flank_edge_set = set(flank_edges)
+        all_splits = sorted(flank_edge_set | hard_splits)
+        boundaries = (
+            [(-1, False)] + [(e, e in flank_edge_set) for e in all_splits] + [(grid_cols - 1, False)]
+        )
 
         for i in range(len(boundaries) - 1):
             left_edge, left_is_real = boundaries[i]
