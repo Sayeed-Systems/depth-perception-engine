@@ -1,20 +1,37 @@
 """
-Packaging/release metadata guards — Phase D17 (packaging repair; see
-docs/DPE_V1_PROVIDER_CONTRACT.md's D17 record).
+Packaging/release metadata guards — Phase D17 (packaging repair) and
+Phase D18 (v1.1.1 packaging repair; see docs/DPE_V1_PROVIDER_CONTRACT.md's
+D17/D18 records).
 
-Guards specifically against the exact class of failure discovered in
-D17: installing this package via a build path that cannot derive a real
-name/version from pyproject.toml's `[project]` table (observed
-externally as `pip install git+https://...` producing
-`UNKNOWN.egg-info`/`UNKNOWN.dist-info`, `pip show` finding nothing, and
-`import depth_perception_engine` failing).
+Guards against two distinct, proven failure classes:
 
-Deliberately NOT a network/VCS-install test (Task's own explicit
-"prefer a lightweight metadata/import/build check rather than turning
-normal unit tests into expensive network-install tests" instruction) —
-every test here is static-file-parsing or a local, no-network wheel
-build using whatever setuptools/wheel are already importable in the
-current interpreter.
+D17 — installing via a build path that cannot derive a real name/version
+from pyproject.toml's `[project]` table (observed externally as
+`pip install git+https://...` producing `UNKNOWN.egg-info`/
+`UNKNOWN.dist-info`, `pip show` finding nothing, `import
+depth_perception_engine` failing).
+
+D18 — a real `pip install`/`pip wheel` under genuine PEP 517 build
+ISOLATION on Python 3.10 (Ubuntu 22.04 dist-packages layout) silently
+builds a wheel with correct name/version metadata but ZERO actual code —
+no error, no warning, `pip` reports success, `import
+depth_perception_engine` then fails with a plain `ModuleNotFoundError`.
+Proven NOT reproducible via `--no-build-isolation` (any setuptools
+version) — which is exactly why `TestRealWheelBuildProducesCorrectMetadata`
+below, D17's own "real build" check, did not catch it: it deliberately
+uses `--no-build-isolation`. `TestIsolatedBuildProducesNonEmptyWheel`
+closes that gap with a genuinely isolated build check.
+
+Deliberately NOT expensive network/VCS-install tests as the primary
+mechanism (Task's own explicit "prefer a lightweight metadata/import/
+build check rather than turning normal unit tests into expensive
+network-install tests" instruction) — most tests here are static-file-
+parsing or a local, no-network wheel build using whatever setuptools/
+wheel are already importable in the current interpreter.
+`TestIsolatedBuildProducesNonEmptyWheel` is the one exception: a genuine
+isolated build necessarily fetches its own setuptools/wheel from PyPI
+(that fetch is the exact mechanism under test), so it needs network and
+skips cleanly, not fails, when network is unavailable.
 """
 
 import ast
@@ -94,6 +111,54 @@ class TestSetupPyCompatibilityShimExists:
         assert kwargs.get("name") != "UNKNOWN"
         assert kwargs.get("version"), "setup.py's setup() call has no version kwarg"
         assert kwargs.get("version") != "UNKNOWN"
+
+
+class TestSetupPyDeclaresPackagesExplicitly:
+    """Phase D18: package discovery must be declared imperatively in
+    setup.py (`packages=find_packages(...)`, `package_dir=...`), NOT via
+    pyproject.toml's `[tool.setuptools.packages.find]` TOML auto-discovery
+    — that mechanism was proven to silently resolve to zero packages under
+    real PEP 517 build isolation on Python 3.10 (see this file's own
+    module docstring and setup.py's own docstring for the full
+    investigation). `_setup_py_kwargs()` only captures `ast.Constant`
+    keyword values (see its own docstring) — `packages`/`package_dir` are
+    a function call and a dict, not constants, so this test parses the AST
+    directly instead."""
+
+    def test_setup_py_call_has_packages_and_package_dir_keywords(self):
+        with open(_SETUP_PY_PATH, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=_SETUP_PY_PATH)
+        setup_call = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "setup"
+        )
+        keyword_names = {kw.arg for kw in setup_call.keywords}
+        assert "packages" in keyword_names, (
+            "setup.py's setup() call has no packages= keyword — this is the "
+            "Phase D18 fix for the empty-isolated-wheel defect; see setup.py's "
+            "own module docstring before removing it."
+        )
+        assert "package_dir" in keyword_names, (
+            "setup.py's setup() call has no package_dir= keyword — required "
+            "alongside packages= for the src/ layout to resolve correctly."
+        )
+
+    def test_pyproject_toml_does_not_redeclare_packages_find(self):
+        # A [tool.setuptools.packages.find] section coexisting with
+        # setup.py's own explicit packages= would reintroduce exactly the
+        # ambiguity this phase's fix removes — guard against silently
+        # re-adding it. Checked via the parsed TOML structure, not a raw
+        # substring match, so this doesn't false-positive on prose (e.g.
+        # this file's own docstrings/comments) mentioning the section name.
+        data = _load_pyproject()
+        find_section = data.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find")
+        assert find_section is None, (
+            "pyproject.toml has a [tool.setuptools.packages.find] section — "
+            "this was removed in Phase D18 because it silently produces an "
+            "empty wheel under real build isolation on Python 3.10; package "
+            "discovery must stay declared only in setup.py. See "
+            "docs/DPE_V1_PROVIDER_CONTRACT.md's D18 record before re-adding it."
+        )
 
 
 class TestVersionConsistency:
@@ -183,3 +248,63 @@ class TestRealWheelBuildProducesCorrectMetadata:
                 assert "Name: UNKNOWN" not in metadata
                 assert "Version: UNKNOWN" not in metadata
                 assert f"{_EXPECTED_IMPORT_NAME}/__init__.py" in z.namelist()
+
+
+class TestIsolatedBuildProducesNonEmptyWheel:
+    """Phase D18: the actual check that catches the empty-wheel defect —
+    a GENUINELY isolated build (no --no-build-isolation), which is exactly
+    what pip does for a plain `pip install depth-perception-engine` or
+    `pip install git+https://...`, and exactly the invocation
+    TestRealWheelBuildProducesCorrectMetadata's own --no-build-isolation
+    choice does not exercise.
+
+    Needs network (an isolated build fetches its own setuptools/wheel from
+    PyPI, per pyproject.toml's [build-system] requires) — skips cleanly,
+    not fails, if a quick reachability probe to pypi.org fails, matching
+    this file's own "environment gap is not DPE's fault" philosophy.
+    """
+
+    def test_isolated_pip_wheel_build_contains_real_code(self):
+        import socket
+        try:
+            socket.create_connection(("pypi.org", 443), timeout=3).close()
+        except OSError:
+            pytest.skip("no network access to pypi.org — cannot exercise a genuinely isolated build")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "wheel", _REPO_ROOT, "--no-deps", "-w", tmp_dir],
+                capture_output=True, text=True, timeout=300,
+            )
+            assert result.returncode == 0, (
+                f"isolated wheel build failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+            built = [f for f in os.listdir(tmp_dir) if f.endswith(".whl")]
+            assert len(built) == 1, f"expected exactly one wheel, found: {built}"
+
+            import zipfile
+            with zipfile.ZipFile(os.path.join(tmp_dir, built[0])) as z:
+                names = z.namelist()
+                assert f"{_EXPECTED_IMPORT_NAME}/__init__.py" in names, (
+                    f"isolated build produced a wheel with no {_EXPECTED_IMPORT_NAME}/"
+                    f"__init__.py — this is exactly the Phase D18 empty-wheel defect. "
+                    f"Wheel contents: {names}"
+                )
+                # A handful of real submodules, not just __init__.py — the D18
+                # defect produced dist-info-only wheels; this also catches a
+                # PARTIAL discovery regression, not only a total one.
+                for expected_module in (
+                    f"{_EXPECTED_IMPORT_NAME}/geometry/__init__.py",
+                    f"{_EXPECTED_IMPORT_NAME}/pipeline/pipeline.py",
+                    f"{_EXPECTED_IMPORT_NAME}/obstacles/threat_assessment.py",
+                ):
+                    assert expected_module in names, (
+                        f"isolated build wheel is missing {expected_module} — "
+                        f"partial package-discovery regression. Wheel contents: {names}"
+                    )
+                py_file_count = sum(1 for n in names if n.startswith(f"{_EXPECTED_IMPORT_NAME}/") and n.endswith(".py"))
+                assert py_file_count >= 50, (
+                    f"isolated build wheel has only {py_file_count} .py files under "
+                    f"{_EXPECTED_IMPORT_NAME}/ — expected 50+; looks like a partial "
+                    f"discovery regression, not a healthy build."
+                )

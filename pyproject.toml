@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depth-perception-engine"
-version = "1.1.0"
+version = "1.1.1"
 description = "Standalone, ROS-free stereo depth / traversability / obstacle perception library."
 readme = "README.md"
 # Deliberately the TOML-table form, not the newer SPDX-string form
@@ -68,8 +68,25 @@ all = [
     "depth-perception-engine[dev,docs,viz]",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# Phase D18 (v1.1.1 packaging repair): package discovery is now declared
+# explicitly in setup.py (`packages=find_packages(where="src")`,
+# `package_dir={"": "src"}`), NOT here. This TOML-driven
+# `[tool.setuptools.packages.find] where = ["src"]` declaration is what
+# v1.1.0 shipped with, and it is a PROVEN, reproduced defect: under real
+# `pip install`/`pip wheel` PEP 517 build isolation on Python 3.10
+# (verified: Ubuntu 22.04 dist-packages layout), setuptools' TOML-driven
+# auto-discovery silently resolves to ZERO packages — the build succeeds,
+# metadata (name/version) is correct, but the resulting wheel contains
+# only dist-info, no actual code, with no error or warning at any point.
+# Confirmed NOT reproducible via `--no-build-isolation`, and NOT
+# reproducible via a direct manual `setuptools.build_meta.build_wheel()`
+# call using the exact same overlay setuptools/PYTHONPATH pip's isolation
+# would use — isolated only under pip's own real subprocess invocation.
+# Confirmed FIXED by moving discovery to setup.py's imperative
+# `find_packages()` call instead (see setup.py's own docstring for the
+# full investigation) — verified correct (59-module wheel) under the
+# exact real isolated-build invocation that previously produced an empty
+# one. See docs/DPE_V1_PROVIDER_CONTRACT.md's D18 record.
 
 [tool.pytest.ini_options]
 minversion = "7.0"

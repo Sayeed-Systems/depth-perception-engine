@@ -261,7 +261,7 @@ from depth_perception_engine.traversability import (
     TextureClass,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 __all__ = [
     "__version__",
