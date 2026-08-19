@@ -1,92 +1,241 @@
 # Depth Perception Engine
 
-A standalone, ROS-free stereo depth / traversability / obstacle perception
-library. Geometry-only — no object detection, no learned models — designed
-as the perception layer for a UAV navigating indoor environments.
+A standalone, ROS-free stereo depth / geometric-evidence / obstacle
+perception library. Deterministic, geometry-only — no object detection, no
+learned models — built as the geometric perception provider for a UAV
+navigating indoor environments, and designed to be embedded in any
+consuming system (ROS2 node, simulator adapter, desk-test script) without
+dragging in ROS, camera hardware, or a GUI.
 
-Originally built and validated as a single hardware desk-test script; now
-refactored into an installable library (`src/depth_perception_engine/`) so
-it can be imported by MP-01's ROS2 `mp01_perception` package (or any other
-caller) without dragging in ROS, camera hardware, or a GUI. The algorithms
-themselves are unchanged from the validated desk-test version — this was a
-structural refactor, not an algorithm rewrite.
+**Current release: `v1.1.1` — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
+See [Release Status](#release-status) below.
 
 ![Demo](docs/assets/demo.gif)
 
-## Refactor: before → after
+---
 
-The library was restructured from a single flat script into an installable
-package. No algorithm, threshold, or tuned parameter changed — only where
-the code lives and how it's called.
-
-**Before** — one entry point, ten flat top-level folders, camera/GUI/disk
-code mixed in with the algorithm, no tests, not installable:
+## What DPE Provides
 
 ```
-depth_perception_engine/
-├── main.py                       # camera + GUI + algorithm, all in one loop
-├── stereo/                       # rectification.py had a hardcoded default XML path
-├── depth/                        # depth_estimator.py duplicated rectification.py's
-│                                  # calibration-loading code
-├── perception/                   # name didn't describe what it did
-├── fusion/threat_assessment.py   # actually obstacle detection, not fusion
-├── navigation/velocity_planner.py
-├── visualization/overlay_renderer.py
-├── telemetry/run_logger.py
-└── config/stereo_calibration.xml
-
-no tests/, no pyproject.toml, not pip-installable
+Stereo pair (left, right — plain NumPy arrays)
+        |
+        v
+Rectification (calibrated)              stereo.RectificationEngine
+        |
+        v
+Disparity (SGBM)                        stereo.DisparityEngine
+        |
+        v
+Metric depth                            depth.DepthEstimator
+        |
+        v
+Reliability / validity                  quality.*, geometry.reliability
+        |                               (garbage-frame check, shadow-zone /
+        |                                ramp-zone contamination gating)
+        v
+Geometric evidence (opt-in, PipelineConfig)
+        +-- obstacle cloud              geometry.build_obstacle_cloud
+        +-- free-space rays             geometry.build_free_space_rays
+        +-- surface evidence            geometry.surface
+        +-- boundary evidence           geometry.boundary
+        +-- opening evidence            geometry.opening
+        +-- clearance evidence          geometry.provider
+        |
+        v
+Temporal stabilization (opt-in, Level 4)
+        history / consistency / stabilization / rotation
+        compensation / motion-aware reliability / persistence
+        |
+        v
+GeometryFrame — the one authoritative output contract
 ```
 
-**After** — an installable package with a clear library/example boundary:
+This is the repository's actual, current architecture — every stage above
+is a real module under `src/depth_perception_engine/`, not an aspirational
+diagram. `traversability.SceneInterpreter` (region grid + `NavigationDecision`)
+and `obstacles.ThreatAssessor` (per-beam scan) are older, separately
+maintained "Level 0-2" outputs, still real and tested, kept for backward
+compatibility (`mp01_perception` consumes them today) — `GeometryFrame` is
+the newer, final, complete evidence contract a new consumer should target.
+See [Architecture](#architecture) for the full breakdown.
 
-```
-depth_perception_engine/
-├── pyproject.toml                # pip install -e .
-├── src/depth_perception_engine/
-│   ├── calibration/               # new — one file-loading path, no hardcoded default
-│   ├── stereo/
-│   ├── depth/
-│   ├── traversability/            # renamed from perception/ — matches what it does
-│   ├── obstacles/                 # renamed from fusion/threat_assessment.py
-│   ├── fusion/                    # new — result assembly + confidence scoring
-│   ├── config/                    # new — PipelineConfig dataclass
-│   ├── models/                    # new — typed results, no bare dicts
-│   ├── utils/                     # new — shared validation/timing helpers
-│   └── pipeline/                  # new — the public entry point
-├── examples/
-│   ├── live_demo.py               # was main.py
-│   ├── synthetic_demo.py          # new — no camera, no GUI
-│   ├── navigation/
-│   ├── visualization/
-│   └── telemetry/
-└── tests/                          # new — 19 tests
-```
+## Design Principles
 
-Operations performed:
+Only principles demonstrably reflected in code or docs, not aspirational
+marketing:
 
-| # | Change |
+- **Deterministic.** Same input, same config → same output. No
+  randomness anywhere in the algorithm path (benchmark fixtures use fixed
+  seeds specifically so results are reproducible, not because the pipeline
+  itself needs seeding).
+- **ROS-free core.** Zero import of `rclpy`/`sensor_msgs`/`cv_bridge`
+  anywhere under `src/` — enforced by `tests/test_no_ros_dependency.py`
+  via static source scan, not just convention.
+- **Bounded computation.** `TemporalHistory`/`TemporalPersistenceTracker`
+  state is configured with hard bounds (`max_records`, fixed grid shape)
+  and confirmed, by direct measurement over a 500-frame run, not to grow
+  unbounded — see `docs/VALIDATION_REPORT.md`'s D14 addendum.
+- **Explicit uncertainty, not fabricated certainty.** Invalid depth is
+  `0.0`/masked, never a guessed value. `ClearanceEvidence.support_state`
+  (`SUPPORTED`/`PARTIALLY_SUPPORTED`/`NO_EVIDENCE`) and
+  `SurfaceEvidence.planarity` exist specifically so a consumer can weight
+  evidence by confidence rather than trust a bare number blindly — see
+  [Known Limitations](#known-limitations) for why this matters concretely.
+- **Platform-independent library.** No camera driver, no simulator
+  integration, no vehicle identity anywhere in `src/` — a caller supplies
+  two NumPy arrays and a calibration; where those arrays came from
+  (real hardware, Gazebo, a recorded file) is entirely the caller's concern.
+- **Stable public contract.** `GeometryFrame`'s complete type graph is
+  Tier 1 and structurally verified (`tests/test_public_api.py`), not a
+  hand-maintained list — a new field typed against a non-public class fails
+  that test automatically.
+
+## Performance at a Glance
+
+All figures below are measured, cited, and reproducible from this
+repository — see [`docs/VALIDATION_MATRIX.md`](docs/VALIDATION_MATRIX.md)
+for the full table with sources, and
+[Validation Methodology](#validation-methodology) for what "synthetic" and
+"dev-container" mean here.
+
+| | v1.1.1 |
 |---|---|
-| 1 | Extracted calibration file-loading into `calibration/`, removing duplicated `cv2.FileStorage` parsing from both `rectification.py` and `depth_estimator.py` |
-| 2 | Removed the hardcoded default calibration path baked into `RectificationEngine` — every entry point now requires a `StereoCalibration` object passed in explicitly |
-| 3 | Renamed `perception/` → `traversability/` and `fusion/threat_assessment.py` → `obstacles/` to match what each module actually computes |
-| 4 | Wrapped every previously loose dict (`beams`, `scene`, distance measurements) in a typed dataclass: `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading` |
-| 5 | Added `PipelineConfig` — every tunable threshold that used to be a loose module-level constant in `main.py`, now one dataclass |
-| 6 | Added `pipeline.DepthPerceptionPipeline` (stateful, holds engines across frames) and five stateless functions (`compute_disparity`, `estimate_depth`, `classify_traversability`, `detect_obstacles`, `process_stereo_pair`) as the public API |
-| 7 | Moved camera capture, `cv2` GUI overlays, flight-command velocity planning, and disk telemetry logging into `examples/` — none of it is reachable from the library |
-| 8 | Added `pyproject.toml` (src-layout, `opencv-python-headless` for the library core so it never pulls in a GUI-capable OpenCV build) |
-| 9 | Added `tests/` (19 tests): every module imports cleanly, the pipeline builds and runs, every output is the documented structured type, and no `rclpy`/`sensor_msgs`/`cv_bridge`/camera/GUI dependency exists anywhere under `src/` |
-| 10 | Added `docs/INTEGRATION_READINESS.md`, describing exactly how this library will be called from ROS2's `mp01_perception` package later |
+| Depth error @ 1 m / 2 m / 3 m / 5 m / 6 m (median, synthetic) | 0.405% / 0.561% / 1.018% / 0.561% / 3.574% |
+| Observable-ROI valid fraction (synthetic) | 99.3-100% |
+| Boundary precision / recall (synthetic) | 100% / 100% |
+| Opening precision / recall (synthetic) | 100% / 90.9% |
+| Surface-normal p95 angular error, high-planarity/full-coverage (synthetic) | 1.42° |
+| Qualified clearance false-clear sectors (synthetic, 252-sector benchmark) | 0/252 |
+| Standalone DPE latency, mean / p95 / p99 (320×240, dev container) | 38.4 ms / 45.9 ms / 52.2 ms |
+| Standalone DPE throughput (mean-based) | 26.0 FPS |
+| Regression suite | 953/953 passing |
 
-| | Before | After |
-|---|---|---|
-| Entry point | `main.py`, one script | `pip install -e .` + `DepthPerceptionPipeline` |
-| Lines (algorithm code) | 3,335, flat | 2,565 in `src/`, 1,206 in `examples/` |
-| Tests | none | 19 |
-| ROS/camera/GUI coupling | mixed into the algorithm modules | isolated to `examples/`, verified absent from `src/` |
-| Calibration loading | duplicated, hardcoded default path | one function, no default, caller supplies the path |
+Every one of these numbers is a **synthetic-fixture or dev-container**
+measurement. None of them is a physical-hardware or Jetson-target
+measurement — see [Hardware-Pending Validation](#known-limitations).
 
-## Install
+## Architecture
+
+`src/depth_perception_engine/` module-by-module breakdown, the exact
+per-frame pipeline call order, and the full public-API tier reference
+(what's safe to import vs. internal):
+
+- [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) — Tier 1/2/3 symbol reference
+- [`docs/DPE_V1_PROVIDER_CONTRACT.md`](docs/DPE_V1_PROVIDER_CONTRACT.md) — the full `GeometryFrame` design record, phase by phase
+- [`docs/DATA_CONTRACTS.md`](docs/DATA_CONTRACTS.md), [`docs/COORDINATE_FRAMES.md`](docs/COORDINATE_FRAMES.md), [`docs/CALIBRATION.md`](docs/CALIBRATION.md)
+- [Project layout](#project-layout) below for the directory-level map
+
+## Reliability Engineering
+
+DPE's post-freeze `v1.0.1 → v1.1.1` history is a series of audits that each
+found a real, measured gap and closed it with a geometric or
+statistical-methodology fix — never by relaxing a validity gate or tuning a
+threshold to make a specific fixture's number look better. Summary:
+
+| Phase | Problem found | Fix | Result |
+|---|---|---|---|
+| I1 | SGBM smoothness penalty used the 3-channel constant on grayscale-only input | Corrected channel multiplier + `uniquenessRatio` 10→20 | Decorrelated false-valid disparity 41.8%→0.27% |
+| I2 | "~60% whole-frame valid" was misread as reconstruction failure | Corrected metric scope (observable ROI, not whole frame) | 99.3-100% observable-ROI validity — no code change needed |
+| I3 | Occlusion-shadow contamination read as high-confidence valid disparity | New geometric `compute_shadow_zone_mask` signal, threaded through Level 3/4 | ~13.6% contamination reduction |
+| I4 | Low-support noise triggered false boundary positives | Boundary admission recalibrated to require real fractional support | Precision 87.8%→100%, recall unchanged at 100% |
+| I5 | Opening spans spuriously split by dead-zone cells | Span-assembly merge/split logic fixed | Recall 54.5%→90.9%, precision unchanged at 100% |
+| I5.1 | `ClearanceEvidence` magnitude error 13-94% in transition sectors | Root-caused (IQR+percentile aggregation); no safe accuracy fix found | Documented as an unresolved, characterized limitation |
+| I6/I6.3 | 28/252 false-clear sectors found on re-audit | Benchmark-methodology bug fixed (24/28) + two reliability-gating signals closed the remaining 4 | 0/252 false-clear, worst `SUPPORTED` error 139%→4.4% |
+| v1.1.1 | v1.1.0 packaging silently shipped an empty wheel under real build isolation | Explicit `setup.py` package declaration | Verified: isolated wheel, editable install, git-tag install |
+
+Full before/after detail, rejected approaches, and root-cause investigation
+for every row above:
+**[`docs/ENGINEERING_EVOLUTION.md`](docs/ENGINEERING_EVOLUTION.md)**.
+
+## Validation Methodology
+
+- **Fixture families.** Controlled synthetic stereo pairs generated with
+  known ground truth (target depth, plane orientation, gap width) —
+  fronto-parallel/slanted planes, decorrelated noise, periodic patterns,
+  occlusion/dis-occlusion steps, partial-coverage/mixed-surface cells,
+  narrow obstacles, multi-zone scenes. See `benchmarks/*/fixtures.py`.
+- **Deterministic seeds.** Every fixture sweep uses fixed seeds — results
+  are exactly reproducible, not resampled noise averages.
+- **Negative fixtures.** Pure decorrelated noise and single-step
+  (non-opening) scenes are included specifically to measure false-positive
+  rate, not just true-positive accuracy.
+- **Regression testing.** `pytest tests/` (953 tests) plus
+  `benchmarks/i0_baseline/compare_to_baseline.py`, which diffs every
+  current metric against a recorded `v1.0.1` snapshot and reports every
+  leaf-metric delta — nothing is silently allowed to regress unnoticed.
+- **Benchmark provenance.** Every number in this README and
+  `docs/VALIDATION_MATRIX.md` cites the exact script/artifact it came from.
+  Benchmark result JSON is `.gitignore`d (regeneratable, not committed) —
+  see `benchmarks/reporting/release_metrics_manifest.py` for the single
+  place every headline metric is recomputed with its own citation.
+- **Timing-boundary discipline.** "Standalone DPE latency" (this README,
+  `docs/VALIDATION_MATRIX.md`) means `DepthPerceptionPipeline.process()`
+  wall-clock time on a dev container, measured in isolation. It is a
+  **different measurement boundary** from an external consumer's own
+  end-to-end simulation/ROS/wrapper latency — the two are never compared
+  directly in this repository's documentation. See
+  `docs/ENGINEERING_EVOLUTION.md`'s baseline-provenance note.
+
+## Known Limitations
+
+Stated plainly, not softened for presentation — full detail and evidence
+for each in [`docs/VALIDATION_MATRIX.md`](docs/VALIDATION_MATRIX.md) and
+[`docs/ENGINEERING_EVOLUTION.md`](docs/ENGINEERING_EVOLUTION.md):
+
+- **SGBM structural left-side search dead zone.** `numDisparities=128` on a
+  320px frame makes the leftmost ~40% of columns structurally unable to
+  produce disparity, regardless of scene content — a physical search-window
+  limit, not a defect. Always scope validity metrics to the observable ROI,
+  not the whole frame.
+- **Weak-texture long-range depth degradation.** 6 m, weak-texture
+  scenario: 5.296% median relative error — a real, harder case than other
+  6 m scenarios, unresolved.
+- **Clearance transition-sector magnitude limitation.** `ClearanceEvidence.
+  nearest_distance_m` can still be 13-94% off in sectors overlapping a real
+  depth transition or narrow obstacle — root-caused, no safe accuracy fix
+  found. **Safety is separately closed** (0/252 false-clear on the
+  qualified benchmark) — this is a magnitude-only, non-safety limitation.
+- **Partial-coverage surface-normal degradation.** A grid cell with
+  `support_fraction` well below 1.0 can report a large angular error
+  (measured up to 81.5°) even at high self-reported `planarity` —
+  `planarity` alone does not guarantee a correct normal direction.
+- **Benchmark qualification is not a universal physical safety guarantee.**
+  "0/252 false-clear" describes this qualified benchmark's own fixture
+  population. An external integration independently found the same class
+  of contamination on a scene outside that set — `ClearanceEvidence` is
+  calibrated, gated evidence, not an unconditional guarantee for every
+  possible scene. Combine it with `coverage_fraction`, temporal
+  corroboration, and independent sensing.
+- **Physical stereo-camera + Jetson validation remains future work.**
+  Every metric in [Performance at a Glance](#performance-at-a-glance) is a
+  synthetic-fixture or dev-container measurement. Level 3/4 have each been
+  exercised against a real desk-test camera (see `docs/VALIDATION_REPORT.md`'s
+  E7 and Level 4 addenda) but not the target Jetson hardware, and not under
+  real physical motion for rotation-compensation accuracy — see
+  `docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`.
+
+## MP01 Integration
+
+DPE's responsibility inside MP01 (or any consuming system) is **geometric
+perception provider only**:
+
+- **Input:** a rectified (or rectifiable) stereo pair, calibration, and
+  optional short-window angular-rate evidence (`MotionHint`).
+- **Output:** `GeometryFrame` — depth, obstacle/free-space geometry,
+  surface/boundary/opening/clearance evidence, temporal state.
+- **DPE does not:** perform semantic/object classification, own any
+  ROS/topic/node logic, handle camera/IMU drivers, integrate with any
+  specific simulator, hold vehicle/platform identity, run neural inference,
+  perform localization or global mapping, or make any planning/control
+  decision. Those responsibilities live in the sensor layer below DPE
+  (`mp01_sensors` or equivalent) and the perception/planning system above
+  it (a future `neural_perception_engine`/`hybrid_perception_engine` and
+  beyond) — never in this repository.
+
+Full release contract (INPUT/EXECUTION/AUTHORITATIVE-OUTPUT, owns/does-not-own):
+[`docs/RELEASE_NOTES_V1.md`](docs/RELEASE_NOTES_V1.md).
+
+## Installation
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -98,28 +247,28 @@ No camera, no display, and no ROS installation required for the library
 itself. See [Running the examples](#running-the-examples) below for the
 one extra step needed for the GUI demo.
 
-**As a versioned dependency of another project** (e.g. a future
-`hybrid_perception_engine`), install the built release artifact instead
-of an editable checkout — no dev-only tooling, no repository-relative
-paths, no reliance on this checkout's `src/` layout:
+**As a versioned dependency of another project**, install the built release
+artifact instead of an editable checkout:
 
 ```bash
-python -m build                                            # from a clone of this repo — produces dist/*.whl, dist/*.tar.gz
-pip install /path/to/depth_perception_engine-0.1.0-py3-none-any.whl   # in the CONSUMING project's own environment
+python -m build                                                # from a clone of this repo — produces dist/*.whl, dist/*.tar.gz
+pip install /path/to/depth_perception_engine-1.1.1-py3-none-any.whl   # in the CONSUMING project's own environment
+```
+
+or directly from a tag:
+
+```bash
+pip install "git+https://github.com/Sayeed-Systems/depth-perception-engine.git@v1.1.1"
 ```
 
 The installed wheel contains only the runtime package
-(`depth_perception_engine/`) — no `tests/`, `docs/`, or `examples/` — see
+(`depth_perception_engine/`) — no `tests/`, `docs/`, or `examples/`. See
 [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md) for exactly which symbols are
-safe to import (Tier 1/2) versus internal (Tier 3, no stability
-guarantee). `GeometryFrame` is the one authoritative output contract a
-larger external perception system should consume —
-[`docs/DPE_V1_PROVIDER_CONTRACT.md`](docs/DPE_V1_PROVIDER_CONTRACT.md).
+safe to import (Tier 1/2) versus internal (Tier 3, no stability guarantee).
+`GeometryFrame` is the one authoritative output contract a larger external
+system should consume.
 
-## Development Setup
-
-The canonical workflow for working on this repository — nothing beyond
-these four commands is required on a fresh clone:
+### Development Setup
 
 ```bash
 python3 -m venv .venv
@@ -132,16 +281,16 @@ python -m pytest
 `pip install -e ".[dev]"` installs the library in editable mode (src-layout
 — edits under `src/depth_perception_engine/` are picked up immediately, no
 reinstall needed) plus the full test toolchain: `pytest`, `pytest-cov`,
-`pytest-mock`. `python -m pytest` then runs the full suite (162 tests as of
-this writing) using this project's own `[tool.pytest.ini_options]`
-configuration in `pyproject.toml` — no separate pytest config file, no
-`PYTHONPATH` juggling required.
+`pytest-mock`. `python -m pytest` runs the full suite (953 tests as of
+`v1.1.1`) using this project's own `[tool.pytest.ini_options]`
+configuration in `pyproject.toml`.
 
 Other installable extras, same pattern:
 
 ```bash
 pip install -e ".[docs]"      # reserved for a future docs build tool — currently installs nothing extra
-pip install -e ".[all]"       # dev + docs together
+pip install -e ".[viz]"       # matplotlib, for examples/visualize_level3.py and benchmarks/reporting/
+pip install -e ".[all]"       # dev + docs + viz together
 ```
 
 Coverage is available on demand (not enabled by default, to keep a plain
@@ -151,7 +300,7 @@ Coverage is available on demand (not enabled by default, to keep a plain
 pytest --cov=depth_perception_engine
 ```
 
-## Quick start
+## Minimal Usage
 
 Every symbol below imports directly from the package root — this is the
 canonical import style. Subpackage imports
@@ -185,19 +334,10 @@ result.obstacles              # ObstacleAssessment: per-beam nearest-obstacle sc
 result.confidence              # float, 0..1
 result.processing_time_ms     # float
 result.timestamp              # Optional[float] — only set if you pass left_timestamp/right_timestamp
-result.geometry                # Optional[geometry.PointCloud] — None unless PipelineConfig(enable_geometry=True);
-                                # camera-optical-frame (X right, Y down, Z forward) XYZ per pixel, metres,
-                                # (H, W, 3) float32, NaN where invalid — see docs/DATA_CONTRACTS.md
-result.geometry_body           # Optional[geometry.PointCloud] — None unless enable_geometry=True AND a
-                                # body_T_camera_left extrinsic was passed to the pipeline; BODY frame
-                                # (X forward, Y left, Z up), same shape/units/invalid convention as geometry
-result.obstacle_cloud          # Optional[geometry.ObstacleCloud] — None unless enable_obstacle_geometry=True;
-                                # unorganized (N, 3) float32, BODY frame, range-filtered valid surface points
-result.free_space_rays         # Optional[geometry.FreeSpaceRays] — None unless enable_free_space_rays=True;
-                                # one (origin, direction, range) ray per valid pixel — never fabricated for
-                                # invalid/unknown pixels
-result.geometry_metrics        # Optional[geometry.GeometryMetrics] — populated whenever geometry_body exists;
-                                # valid_fraction, point_count, min_obstacle_distance_m, mean_free_space_m
+
+# Level 3/4 (opt-in via PipelineConfig — see docs/DPE_V1_PROVIDER_CONTRACT.md):
+result.geometry_frame          # Optional[GeometryFrame] — the final, authoritative evidence contract;
+                                # None unless PipelineConfig(enable_geometry_frame=True)
 
 pipeline.health()              # PipelineHealth: is_closed, frames_processed, last_confidence, ...
 pipeline.reset()                # clears cross-frame smoothing state, keeps calibration/config
@@ -208,130 +348,19 @@ pipeline.close()                # marks the pipeline unusable; further process()
 to `DepthPerceptionPipeline(...)` above.
 
 See [`examples/synthetic_demo.py`](examples/synthetic_demo.py) for this
-same call shape run standalone (no camera), and
-[`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md) for
-exactly how MP-01's ROS2 `mp01_perception` package will call this later.
+same call shape run standalone (no camera).
 
-## Level 3: 3D geometry (frozen)
-
-Beyond the Level 0-2 fields above, `DepthPerceptionPipeline` can optionally
-produce full 3D geometric perception — metric depth turned into an actual
-point cloud, transformed into the vehicle body frame, and reduced to
-obstacle/free-space evidence with explicit unknown-space semantics. All of
-it is opt-in (every flag defaults `False`/`None`) and purely additive to
-the Level 0-2 fields above.
-
-**What Level 3 includes:**
-- Metric depth with explicit confidence/validity (Level 0-2, always on)
-- Camera-optical-frame 3D point cloud (`result.geometry`)
-- Body-frame 3D point cloud, via a calibrated extrinsic (`result.geometry_body`)
-- Obstacle surface evidence (`result.obstacle_cloud`)
-- Free-space ray evidence, terminating at observed surfaces, never behind them (`result.free_space_rays`)
-- Explicit UNKNOWN-space preservation — invalid/unobserved regions are never rendered as free or occupied, anywhere in the chain
-- Scalar geometry-quality metrics and an opt-in HEALTHY/DEGRADED/NO_USABLE_GEOMETRY classifier (`result.geometry_metrics`, `geometry.classify_geometry_quality`)
-
-**What Level 3 explicitly does NOT include:** a persistent map, temporal
-fusion across frames, IMU/motion compensation, a vehicle collision
-envelope, collision-risk scoring, learned/neural stereo, semantic
-perception, localization, or planning. See
-[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and
-[`docs/E7_IMPLEMENTATION_PLAN.md`](docs/E7_IMPLEMENTATION_PLAN.md) for what
-remains open beyond Level 3.
-
-```python
-from depth_perception_engine.frames import FrameId, RigidTransform
-
-body_T_camera_left = RigidTransform(       # measured, calibrated extrinsic — see docs/COORDINATE_FRAMES.md
-    rotation=..., translation=...,          # (3,3), (3,) — camera pose expressed in the body frame
-    from_frame=FrameId.CAMERA_OPTICAL_LEFT, to_frame=FrameId.BODY,
-)
-config = PipelineConfig(enable_geometry=True, enable_obstacle_geometry=True, enable_free_space_rays=True)
-pipeline = DepthPerceptionPipeline(config, calibration, body_T_camera_left=body_T_camera_left)
-```
-
-A standalone visual validation tool (outside the core engine — requires
-`pip install -e ".[viz]"`) renders the left image, disparity, depth, and
-BODY-frame geometry (with explicit axes) side by side:
-
-```bash
-pip install -e ".[viz]"
-python examples/visualize_level3.py --live      # one real camera frame
-```
-
-![Level 3 geometry example](docs/assets/09_level3_healthy_scene.png)
-
-Live demo (left image, disparity, metric depth, BODY-frame top-down geometry — all four panels are the real, unmodified `DepthPerceptionResult` from a live camera, reproduce with `python examples/generate_demo_gif.py`):
-
-![Level 3 live demo](docs/assets/10_level3_live_demo.gif)
-
-## Level 4: temporal perception (frozen)
-
-Beyond Level 3's single-frame geometry, `DepthPerceptionPipeline` can
-optionally track that geometry **across time**: a bounded recent history,
-frame-to-frame consistency, confidence-weighted stabilization, short-window
-rotational motion compensation, an explicit motion-aware reliability
-verdict, and deterministic per-cell persistence classification
-(NEW/PERSISTENT/DISAPPEARING). Every capability is opt-in (all flags
-default `False`) and purely additive to every Level 0-3 field — with
-Level 4 disabled, output is byte-identical to Level 3 alone.
-
-**What Level 4 includes:** temporal history (`result.temporal_admission_status`),
-temporal consistency (`result.temporal_consistency`), temporal stabilization
-(`result.temporal_stabilization`), rotation compensation
-(`result.rotation_compensation_status`), motion-aware reliability
-(`result.motion_aware_reliability`), and per-cell persistence classification
-(`result.temporal_persistence`). See
-[`docs/LEVEL4_CANONICAL_REFERENCE.md`](docs/LEVEL4_CANONICAL_REFERENCE.md)
-for the single authoritative, current reference (organized by concept, not
-build order) and
-[`docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`](docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md)
-for what remains unverified against real IMU/rotation hardware.
-
-**What Level 4 explicitly does NOT include:** VIO, SLAM, localization, a
-world map, planning, control, or any neural/learned component — see the
-canonical reference's own non-goals section.
-
-```python
-config = PipelineConfig(
-    enable_temporal=True, enable_temporal_stabilization=True,
-    enable_rotation_compensation=True, enable_motion_aware_reliability=True,
-    enable_temporal_persistence=True,
-)
-pipeline = DepthPerceptionPipeline(config, calibration, body_T_camera_left=body_T_camera_left)
-```
-
-A standalone live OpenCV dashboard (outside the core engine) drives the
-real stereo camera through the entire Level 4 chain continuously — raw
-depth, stabilized depth, and the persistence state grid side by side, with
-consistency/rotation-compensation/reliability/persistence telemetry
-overlaid. The IMU remains simulated: pressing `i` attaches a synthetic
-`MotionHint` to each subsequent frame, and the dashboard displays an
-unmistakable **"SIMULATED MOTIONHINT: ON — (NOT real IMU data)"** badge in
-red the entire time it's active, so simulated motion input is never
-confused with a real sensor reading:
-
-```bash
-python examples/visualize_level4_live.py            # q/ESC quit, r reset, i toggle simulated MotionHint
-```
-
-Live demo (real camera, full Level 4 chain — the persistence grid turns
-green as evidence repeats and is classified PERSISTENT; the SIMULATED
-MotionHint badge appears partway through, exactly when it was toggled on;
-reproduce with `python examples/generate_level4_live_gif.py`):
-
-![Level 4 live demo](docs/assets/11_level4_live_demo.gif)
-
-## Pipeline
+### Pipeline (internal stage order)
 
 ```
 (left_image, right_image) — already-split NumPy arrays, e.g. from ROS
-  → rectify (calibrated)                     stereo.RectificationEngine
-  → disparity (SGBM)                         stereo.DisparityEngine
-  → depth estimation                          depth.DepthEstimator
-  → 3D geometry (opt-in, camera frame only)   geometry.PointCloudBuilder
-  → traversability grid + nav decision        traversability.SceneInterpreter
-  → per-beam obstacle scan                    obstacles.ThreatAssessor
-  → fused DepthPerceptionResult                fusion.result_builder
+  -> rectify (calibrated)                     stereo.RectificationEngine
+  -> disparity (SGBM)                         stereo.DisparityEngine
+  -> depth estimation                          depth.DepthEstimator
+  -> 3D geometry (opt-in)                      geometry.PointCloudBuilder
+  -> traversability grid + nav decision        traversability.SceneInterpreter
+  -> per-beam obstacle scan                    obstacles.ThreatAssessor
+  -> fused DepthPerceptionResult/GeometryFrame  fusion.result_builder
 ```
 
 `pipeline.DepthPerceptionPipeline` wires all of the above and holds it
@@ -340,9 +369,9 @@ EMA-smooths and debounces its output over time; rebuilding it every frame
 throws that smoothing away. `pipeline.api` also exposes each stage as a
 plain, stateless function (`compute_disparity`, `estimate_depth`,
 `classify_traversability`, `detect_obstacles`, `process_stereo_pair`) for
-one-shot use, scripting, or tests — see that module's docstring.
+one-shot use, scripting, or tests.
 
-## Why geometry-only
+### Why geometry-only
 
 Object detection (YOLO) was deliberately excluded, not just deferred as an
 afterthought: obstacle avoidance only requires *where* something is, not
@@ -350,18 +379,18 @@ afterthought: obstacle avoidance only requires *where* something is, not
 Jetson Orin Nano) is reserved for future VIO/SLAM work instead. See
 Section 12 of [`docs/report.html`](docs/report.html) for the full reasoning.
 
-## Project layout
+### Project layout
 
 ```
 src/depth_perception_engine/   the installable library — see below
 tests/                         pytest suite: imports, pipeline, API, no-ROS-dependency proof
+benchmarks/                    I0-I6 qualification suites + reporting/ (release charts/manifest)
 examples/                      runnable scripts + demo-only code (camera, GUI, flight-command
                                 planning, disk telemetry) — none of this is part of the library
-docs/                          architecture blueprint, diagrams, roadmap, integration readiness
-runs/                          per-run telemetry from past examples/live_demo.py sessions
+docs/                          architecture, contracts, validation reports, engineering history
 ```
 
-### `src/depth_perception_engine/`
+`src/depth_perception_engine/` module map:
 
 | Module | Responsibility |
 |---|---|
@@ -370,8 +399,10 @@ runs/                          per-run telemetry from past examples/live_demo.py
 | `depth/` | `DepthEstimator` (disparity → metric depth via the calibration's Q matrix), `DistanceReader` (single-point ROI distance reading) |
 | `traversability/` | `RegionAnalyzer` + `SceneInterpreter` — grid-based region classification and a global `NavigationDecision` |
 | `obstacles/` | `ThreatAssessor` — per-beam nearest-obstacle scan, EMA-smoothed and debounced |
+| `geometry/` | `PointCloudBuilder`, obstacle cloud/free-space rays, surface/boundary/opening/clearance evidence, reliability (shadow-zone/ramp-zone) signals, `GeometryFrame` provider |
+| `temporal/` | Level 4: history, consistency, stabilization, rotation compensation, persistence |
 | `quality/` | `looks_like_garbage_frame` — adjacent-pixel correlation check that flags corrupt/uncorrelated-noise frames before any stereo processing runs |
-| `fusion/` | Combines the above into one `DepthPerceptionResult`, including the aggregate `confidence` score |
+| `fusion/` | Combines the above into one `DepthPerceptionResult`/`GeometryFrame`, including the aggregate `confidence` score |
 | `config/` | `PipelineConfig` — every tunable threshold as one plain dataclass |
 | `models/` | `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading` — typed outputs, never bare dicts |
 | `utils/` | Small shared helpers (input validation, timing) used by the pipeline glue, not by any one algorithm |
@@ -398,109 +429,54 @@ Everything here is a *consumer* of the library, never a dependency of it:
 | `visualization/overlay_renderer.py` | `cv2` drawing for `live_demo.py`'s on-screen display |
 | `telemetry/run_logger.py` | Disk-based per-run logging (`runs/<timestamp>/`) for desk-test sessions |
 
-## Running the examples
+### Running the examples
 
 ```bash
 # No hardware needed:
 python examples/synthetic_demo.py
 
 # Real camera + on-screen display:
-pip uninstall opencv-python-headless && pip install opencv-python
 python examples/live_demo.py
-```
 
-`live_demo.py` requires a USB stereo camera presenting as a single
-side-by-side 640×240 video device, and reads calibration from
-`examples/config/stereo_calibration.xml`. Camera index is set at the top of
-the file (`CAMERA_INDEX`) — verify with `v4l2-ctl --list-devices` if
-obstacle distances look wrong (e.g. picking up a laptop webcam instead of
-the stereo rig). Controls while running: `q` to quit, `d` to toggle the
-disparity view, `g` to toggle the traversability grid overlay. Each run
-logs config, system info, and per-frame telemetry to `runs/<timestamp>/`.
-
-```bash
 # Level 4 live dashboard — real camera, full temporal chain, on-screen:
-pip uninstall opencv-python-headless && pip install opencv-python
 python examples/visualize_level4_live.py
-python examples/visualize_level4_live.py --camera-index 1 --simulate-motion-hint
 ```
 
-`visualize_level4_live.py` reuses `live_demo.py`'s camera-opening approach
-and `visualize_level3.py`'s capture geometry/BODY extrinsic directly (no
-competing camera abstraction). Controls: `q`/ESC to quit, `r` to call
-`DepthPerceptionPipeline.reset()`, `i` to toggle a simulated `MotionHint`
-(clearly badged on-screen — see the Level 4 section above). It reads only
-public `DepthPerceptionResult` fields and reimplements no Level 4 algorithm
-itself.
-
-## Testing
+## Validation / Tests
 
 ```bash
-pip install -e ".[dev]"
-pytest tests/ -v
+python -m pytest tests/ -q                              # full regression suite (953 tests)
+python -m pytest tests/test_packaging_metadata.py -v     # packaging/version-consistency guards
+python -m benchmarks.i0_baseline.compare_to_baseline      # diff current behavior against the v1.0.1 baseline
+python -m benchmarks.reporting.generate_release_charts    # regenerate docs/assets/metrics/*.png from real benchmark data
 ```
 
-162 tests (grew from the 19 the src/ refactor above originally added,
-through a 2026-08-05 baseline-recovery pass and a Level 3 Phase E1
-contract-freezing pass — see `docs/VALIDATION_REPORT.md` and
-`docs/LEVEL3_ARCHITECTURE.md`): every module imports cleanly,
-`DepthPerceptionPipeline` can be built and `.process()`d (including
-repeated calls, its full lifecycle — `reset()`/`close()`/`health()` — and
-rejecting mismatched stereo pairs), every output field is the documented
-structured type (never a bare dict), depth math is verified both
-differentially against OpenCV and against independent hand-computed known
-values, the new Level 3 calibration/geometry contracts construct and
-validate correctly (though nothing produces a real point cloud yet — see
-`docs/IMPLEMENTATION_STATUS.md`), and — the requirement this whole
-refactor exists for — no ROS dependency exists anywhere in the library.
-See `docs/ARCHITECTURE.md`,
-`docs/DATA_CONTRACTS.md`, and `docs/CALIBRATION.md` for the full module
-boundaries, output contracts, and calibration conventions;
-`docs/IMPLEMENTATION_STATUS.md` for what's implemented versus deferred;
-`docs/PUBLIC_API.md` for the authoritative Tier 1/2/3 API reference and
-stability policy.
+Full validation matrix (every metric, before/after, target, status,
+artifact source): [`docs/VALIDATION_MATRIX.md`](docs/VALIDATION_MATRIX.md).
+Full engineering history: [`docs/ENGINEERING_EVOLUTION.md`](docs/ENGINEERING_EVOLUTION.md).
 
-## Status
+## Release Status
 
-Rectification, disparity, depth estimation, obstacle beams, and the
-traversability grid are validated on real hardware and now packaged as an
-installable library (this refactor). `examples/live_demo.py` additionally
-wires in a reactive velocity planner for standalone desk-testing, though
-flight-command generation is intentionally *not* part of the library's own
-scope — see [`docs/INTEGRATION_READINESS.md`](docs/INTEGRATION_READINESS.md).
-IMU, VIO/SLAM, lidar fusion, and the rover stack are planned but not yet
-implemented — see the status table in `docs/report.html` for the full
-breakdown.
+**`v1.1.1` — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
 
-Level 3 (single-frame 3D geometry) and Level 4 (temporal perception —
-history, consistency, stabilization, rotation compensation, reliability,
-persistence) are both implemented and frozen in software — see
-[`docs/LEVEL4_CANONICAL_REFERENCE.md`](docs/LEVEL4_CANONICAL_REFERENCE.md).
-Level 4's live dashboard has been run against the real stereo camera (see
-the GIF above); real IMU/measured-rotation/Jetson validation remains
-explicitly pending — see
-[`docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md`](docs/LEVEL4_HARDWARE_VALIDATION_PENDING.md).
+`GeometryFrame`'s complete type graph has been Tier 1 and structurally
+frozen since the D13/D16 freeze passes. The post-freeze `I1-I6.3`
+improvement series (summarized above) closed every measurement gap found
+by re-auditing the shipped implementation, without any `GeometryFrame`
+contract change. `v1.1.1` closed one real packaging defect (an empty wheel
+under real build isolation), audited and left unchanged one surface-normal
+finding that traced to an already-known limitation rather than a new
+defect, and made `ClearanceEvidence`'s evidence-vs-guarantee semantics
+explicit.
 
-**DPE V1 provider contract:** `GeometryFrame` (`DepthPerceptionResult.geometry_frame`,
-opt-in via `PipelineConfig.enable_geometry_frame`) is the FINAL,
-authoritative geometric/temporal evidence contract this library exposes
-to any larger external perception system — full design record and
-phase-by-phase validation history (controlled ground-truth, degradation,
-sensor-contract independence, public-API hardening, performance,
-packaging/reproducibility) in
-[`docs/DPE_V1_PROVIDER_CONTRACT.md`](docs/DPE_V1_PROVIDER_CONTRACT.md).
-**Known caveat:** `SurfaceEvidence` is advisory under low-texture/
-decorrelated-stereo conditions (real `StereoSGBM`'s smoothness prior can
-report high-confidence planarity on pure noise) and must not alone be
-treated as authoritative geometry — see that document's D11 record.
-DPE owns perception evidence only: no navigation policy, no
-localization/mapping/planning/control, no ROS/hardware/simulator
-dependency (verified — `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D12 record),
-and no vehicle-specific behavior. One-page release summary — purpose,
-capabilities, the release INPUT/EXECUTION/OUTPUT contract, DPE's explicit
-non-responsibilities, and validation status — in
-[`docs/RELEASE_NOTES_V1.md`](docs/RELEASE_NOTES_V1.md).
+**Further DPE algorithm optimization requires evidence from real
+stereo-camera / Jetson hardware qualification.** Every remaining
+characterized limitation in this README is a synthetic-fixture or
+dev-container finding — whether and how each one matters on a real sensor
+is genuinely unknown until measured on one. The next development track is
+`neural_perception_engine` (NPE), consuming `GeometryFrame` as its one
+geometric-evidence input.
 
 ## License
 
-[MIT](LICENSE)
+See [`LICENSE`](LICENSE).
