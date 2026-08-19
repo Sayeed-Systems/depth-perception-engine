@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depth-perception-engine"
-version = "1.0.1"
+version = "1.1.0"
 description = "Standalone, ROS-free stereo depth / traversability / obstacle perception library."
 readme = "README.md"
 # Deliberately the TOML-table form, not the newer SPDX-string form

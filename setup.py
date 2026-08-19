@@ -36,4 +36,4 @@ src/depth_perception_engine/__init__.py's own `__version__`.
 
 from setuptools import setup
 
-setup(name="depth-perception-engine", version="1.0.1")
+setup(name="depth-perception-engine", version="1.1.0")
