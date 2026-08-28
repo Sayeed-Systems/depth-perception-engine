@@ -29,14 +29,32 @@ from depth_perception_engine.traversability.types import NavigationDecision, Reg
 
 @dataclass(frozen=True, slots=True)
 class StereoObservation:
-    """One stereo capture, as a single self-contained value instead of loose
-    positional arguments.
+    """THE canonical DPE core input contract — one stereo capture as a single
+    self-contained value.
 
-    Optional convenience for callers that want to carry timestamps/frame
-    identity alongside the images through their own code — not required by
-    DepthPerceptionPipeline.process(), which still takes left_image/
-    right_image directly. Use process_observation() to hand one of these to
-    the pipeline instead.
+    This is the ONE input shape at DPE's core boundary
+    (docs/DUAL_INTERFACE_ARCHITECTURE.md): every supported path into DPE
+    produces a StereoObservation and hands it to
+    DepthPerceptionPipeline.process_observation(), the single geometry
+    implementation. A consumer embedding DPE prepares one of these itself;
+    the standalone/sensor-facing interface
+    (standalone.StandaloneStereoInterface) exists to adapt raw and
+    convenient inputs — a combined side-by-side frame, plain angular-rate
+    tuples, loose per-frame arguments — into exactly this same value.
+
+    It carries only what DPE genuinely requires: observation identity,
+    timestamps, the stereo pair, and optional normalized motion. There is
+    deliberately no platform/vehicle concept, no planning constraint, and
+    no semantics here — DPE observes geometry from the sensor's own
+    perspective, and platform meaning belongs to whatever consumes
+    GeometryFrame.
+
+    Image arrays are held BY REFERENCE — constructing one of these copies
+    nothing.
+
+    DepthPerceptionPipeline.process(left_image, right_image, ...) remains
+    fully supported for callers holding two loose arrays; it builds one of
+    these and delegates.
 
     left_timestamp/right_timestamp are opaque caller-defined floats (e.g.
     seconds since epoch or a monotonic clock) — this library performs no

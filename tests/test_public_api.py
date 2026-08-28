@@ -99,7 +99,19 @@ TIER_2_SYMBOLS = {
     "classify_traversability",
 }
 
-EXPECTED_ALL = TIER_1_SYMBOLS | TIER_2_SYMBOLS | {"__version__"}
+# The dual-interface refactor's own public entry point: the standalone /
+# sensor-facing convenience interface (docs/DUAL_INTERFACE_ARCHITECTURE.md).
+# Deliberately its own set rather than a Tier 1 addition — it is NOT part of
+# the core/embedded contract an external consumer (a future
+# hybrid_perception_engine) uses, and it is resolved LAZILY by the root
+# package's PEP 562 __getattr__ so that importing the core never loads it.
+# Its canonical import path is depth_perception_engine.standalone; the root
+# export exists for symmetry with every other supported public symbol.
+STANDALONE_SYMBOLS = {
+    "StandaloneStereoInterface",
+}
+
+EXPECTED_ALL = TIER_1_SYMBOLS | TIER_2_SYMBOLS | STANDALONE_SYMBOLS | {"__version__"}
 
 # symbol -> (top-level module, subpackage module) for identity checks
 DUPLICATED_PATHS = {

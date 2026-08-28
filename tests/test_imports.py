@@ -39,6 +39,12 @@ _MODULES = [
     "depth_perception_engine.pipeline",
     "depth_perception_engine.pipeline.api",
     "depth_perception_engine.pipeline.pipeline",
+    # Dual-interface architecture (docs/DUAL_INTERFACE_ARCHITECTURE.md):
+    # the core/embedded API namespace and the standalone/sensor-facing
+    # convenience interface.
+    "depth_perception_engine.core",
+    "depth_perception_engine.standalone",
+    "depth_perception_engine.standalone.interface",
 ]
 
 

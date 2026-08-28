@@ -12,6 +12,21 @@ Usage:
 
     result = pipeline.process(left_image, right_image)   # per frame
 
+DUAL-INTERFACE ARCHITECTURE (docs/DUAL_INTERFACE_ARCHITECTURE.md). This
+class IS the DPE core engine, and process_observation() is its single
+geometry implementation — every supported path into DPE funnels into that
+one method:
+
+    process(left, right, ...)          adapts loose arguments -> observation
+    process_geometry_frame(obs)        core/embedded entry -> GeometryFrame
+    standalone.StandaloneStereoInterface   adapts raw/convenient sensor input
+
+There is no second geometry pipeline and no standalone/embedded mode flag
+in this class. A consumer embedding DPE constructs this class (or imports
+depth_perception_engine.core) and calls process_geometry_frame(); it never
+imports depth_perception_engine.standalone, so that layer is absent from
+its execution path rather than switched off inside it.
+
 Every engine (DisparityEngine, RectificationEngine, ThreatAssessor, and —
 Level 3, Phase E3, when PipelineConfig.enable_geometry is True —
 PointCloudBuilder; Level 4, Phase E2, when PipelineConfig.enable_temporal
@@ -50,6 +65,7 @@ from depth_perception_engine.geometry.geometry_metrics import build_geometry_met
 from depth_perception_engine.geometry.obstacle_extractor import build_obstacle_cloud
 from depth_perception_engine.geometry.opening import build_opening_evidence
 from depth_perception_engine.geometry.point_cloud_builder import PointCloudBuilder
+from depth_perception_engine.geometry.provider import GeometryFrame
 from depth_perception_engine.geometry.reliability import compute_shadow_zone_mask, compute_ramp_zone_mask
 from depth_perception_engine.geometry.rigid_transform import transform_point_cloud
 from depth_perception_engine.geometry.surface import build_surface_evidence
@@ -263,6 +279,21 @@ class DepthPerceptionPipeline:
     ) -> DepthPerceptionResult:
         """Run one stereo pair through the full pipeline.
 
+        STANDALONE-CONVENIENCE SIGNATURE. This method owns no geometry
+        processing of its own: it adapts these loose arguments into the
+        canonical core input contract (models.StereoObservation) and
+        delegates to process_observation(), which is the single
+        implementation both DPE interfaces converge on — see
+        docs/DUAL_INTERFACE_ARCHITECTURE.md. Every argument below is
+        forwarded onto the equivalent StereoObservation field BY
+        REFERENCE; no image is copied, reshaped, or reconstructed here,
+        so this remains exactly as cheap as it was before the
+        dual-interface separation. Kept as a fully supported entry point
+        (mp01_perception, this repository's own examples/benchmarks and
+        the whole existing test suite call it) — an embedded consumer
+        that already holds a StereoObservation should call
+        process_observation()/process_geometry_frame() directly instead.
+
         Args:
             left_image, right_image: NumPy stereo pair (BGR or grayscale),
                 already split — this does not split a combined frame (see
@@ -310,9 +341,68 @@ class DepthPerceptionPipeline:
                 rectification failure — see the comment at that call site
                 for why this is not caught and silently degraded here.
         """
+        return self.process_observation(
+            StereoObservation(
+                left_image=left_image,
+                right_image=right_image,
+                left_timestamp=left_timestamp,
+                right_timestamp=right_timestamp,
+                motion_hint=motion_hint,
+                motion_hints=motion_hints,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    def process_observation(self, observation: StereoObservation) -> DepthPerceptionResult:
+        """CORE ENTRY POINT — run one canonical StereoObservation through
+        the full geometry pipeline.
+
+        This is DPE's single geometry-processing implementation. Every
+        supported path into DPE ends here:
+
+            standalone.StandaloneStereoInterface.process*()
+                -> process()/process_observation()  -> THIS METHOD
+            an embedded consumer (e.g. a future hybrid_perception_engine)
+                -> process_observation()/process_geometry_frame()
+                                                    -> THIS METHOD
+
+        There is deliberately no second, interface-specific geometry
+        implementation and no `standalone`/`embedded` mode flag anywhere
+        in this class — the two interfaces differ only in how a valid
+        StereoObservation is produced, never in what happens to it
+        afterwards. See docs/DUAL_INTERFACE_ARCHITECTURE.md.
+
+        `observation.left_image`/`.right_image` are used by reference —
+        never copied here. `observation.calibration`/`.frame_id` remain
+        reserved and unread (see models.StereoObservation's own
+        docstring): the calibration this pipeline was constructed with is
+        always the one used. Every other field maps one-to-one onto
+        process()'s own identically named parameter, with identical
+        semantics — see process()'s docstring for what each one does.
+
+        Returns:
+            A DepthPerceptionResult (whose `geometry_frame` field is
+            populated only when PipelineConfig.enable_geometry_frame is
+            True). An embedded consumer that wants the authoritative
+            GeometryFrame contract directly should call
+            process_geometry_frame() instead.
+
+        Raises:
+            RuntimeError: If called after close().
+            ValueError, RuntimeError: Propagated unchanged from
+                RectificationEngine.rectify() (when rectify=True) on a
+                rectification failure — see the comment at that call site
+                for why this is not caught and silently degraded here.
+        """
+        left_image = observation.left_image
+        right_image = observation.right_image
+        left_timestamp = observation.left_timestamp
+        right_timestamp = observation.right_timestamp
+        motion_hint = observation.motion_hint
+        motion_hints = observation.motion_hints
         if self._closed:
             raise RuntimeError(
-                "DepthPerceptionPipeline.process() called after close() — "
+                "DepthPerceptionPipeline.process_observation() called after close() — "
                 "construct a new pipeline instead of reusing a closed one."
             )
         require_matching_stereo_pair(left_image, right_image)
@@ -867,14 +957,7 @@ class DepthPerceptionPipeline:
         # no new threshold — for GeometryFrame.quality's own
         # geometry_validity_state dimension.
         if self._config.enable_geometry_frame:
-            result = dataclasses.replace(result, geometry_frame=build_geometry_frame(
-                result,
-                focal_length_px=self._rectified_focal_length_px,
-                principal_point_x_px=self._rectified_principal_point_px[0],
-                clearance_min_coverage_fraction=self._config.clearance_min_coverage_fraction,
-                geometry_healthy_min_valid_fraction=self._config.geometry_healthy_min_valid_fraction,
-                geometry_degraded_min_valid_fraction=self._config.geometry_degraded_min_valid_fraction,
-            ))
+            result = dataclasses.replace(result, geometry_frame=self._build_geometry_frame(result))
 
         self._frames_processed += 1
         self._last_confidence = result.confidence
@@ -883,28 +966,67 @@ class DepthPerceptionPipeline:
         return result
 
     # ------------------------------------------------------------------
-    def process_observation(self, observation: StereoObservation) -> DepthPerceptionResult:
-        """Convenience wrapper: unpack a StereoObservation and call process().
+    def process_geometry_frame(self, observation: StereoObservation) -> GeometryFrame:
+        """CORE ENTRY POINT — run one canonical StereoObservation and
+        return the authoritative GeometryFrame contract directly.
 
-        Equivalent to
-        ``process(observation.left_image, observation.right_image,
-        observation.left_timestamp, observation.right_timestamp,
-        observation.motion_hint, observation.motion_hints)`` — provided
-        for callers that prefer passing one value instead of six.
+        This is the method an embedded consumer (a future
+        hybrid_perception_engine) is expected to call:
 
-        Level 4, Phase E2: observation.motion_hint is now forwarded (was
-        reserved/unconsumed at Phase E1) — see process()'s own motion_hint
-        docstring for exactly what happens to it. Level 4, Phase E5:
-        observation.motion_hints is now forwarded too — see process()'s
-        own motion_hints docstring.
+            geometry = pipeline.process_geometry_frame(observation)
+
+        It is a thin composition of process_observation() (the single
+        geometry implementation — called exactly once here, nothing is
+        recomputed) and fusion.result_builder.build_geometry_frame() (the
+        same builder, called with the same arguments, that
+        process_observation() itself uses when
+        PipelineConfig.enable_geometry_frame is True — see
+        _build_geometry_frame below). No geometry algorithm, threshold, or
+        calibration value is duplicated, re-derived, or reinterpreted for
+        this path.
+
+        Unlike DepthPerceptionResult.geometry_frame, the returned frame is
+        never None: calling this method IS the caller's explicit request
+        for a GeometryFrame, so it is built whether or not
+        PipelineConfig.enable_geometry_frame happens to be set. That flag
+        keeps its exact pre-existing meaning — it gates only whether
+        DepthPerceptionResult.geometry_frame is populated on the legacy
+        result object — and setting it merely means the frame this method
+        returns was already built during process_observation() rather than
+        immediately afterwards. Both branches call the identical builder
+        with identical arguments and are therefore field-for-field
+        identical; see tests/test_dual_interface_architecture.py.
+
+        Raises:
+            RuntimeError: If called after close() (propagated unchanged
+                from process_observation()).
         """
-        return self.process(
-            observation.left_image,
-            observation.right_image,
-            left_timestamp=observation.left_timestamp,
-            right_timestamp=observation.right_timestamp,
-            motion_hint=observation.motion_hint,
-            motion_hints=observation.motion_hints,
+        result = self.process_observation(observation)
+        if result.geometry_frame is not None:
+            return result.geometry_frame
+        return self._build_geometry_frame(result)
+
+    # ------------------------------------------------------------------
+    def _build_geometry_frame(self, result: DepthPerceptionResult) -> GeometryFrame:
+        """The one place GeometryFrame is constructed from a completed
+        DepthPerceptionResult — shared verbatim by process_observation()'s
+        own enable_geometry_frame branch and by process_geometry_frame()
+        above, so the two can never drift apart.
+
+        Phase D2/D7/D8 semantics are unchanged by the dual-interface
+        refactor: build_geometry_frame() only reads fields off `result` —
+        no recomputation, no new algorithm — and focal_length_px/
+        principal_point_x_px/the two geometry_*_min_valid_fraction
+        thresholds are the same already-computed, calibration-derived
+        values this pipeline has passed since D7/D8.
+        """
+        return build_geometry_frame(
+            result,
+            focal_length_px=self._rectified_focal_length_px,
+            principal_point_x_px=self._rectified_principal_point_px[0],
+            clearance_min_coverage_fraction=self._config.clearance_min_coverage_fraction,
+            geometry_healthy_min_valid_fraction=self._config.geometry_healthy_min_valid_fraction,
+            geometry_degraded_min_valid_fraction=self._config.geometry_degraded_min_valid_fraction,
         )
 
     # ------------------------------------------------------------------

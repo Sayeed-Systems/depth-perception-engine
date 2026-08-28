@@ -9,6 +9,36 @@ The authoritative reference for what is, and is not, this library's stable publi
 
 These are deliberately different names for different things — the repository is not named after its one high-level class, and the class is not renamed to match the repository. There is no `DepthPerceptionEngine` symbol anywhere in this codebase, and none is planned. An alias under that name was considered and rejected: `DepthPerceptionPipeline` is already the coherent, tested, hardware-verified name every existing caller (including `mp01_perception`'s real, current code) already uses — introducing a second name for the same class would be naming churn with no technical justification, exactly the outcome this document exists to prevent.
 
+## Two supported interfaces: CORE/EMBEDDED and STANDALONE
+
+DPE is consumed through exactly two interfaces, which differ only in how a valid input reaches the engine — the full rationale, execution graph and enforced invariants are in [`DUAL_INTERFACE_ARCHITECTURE.md`](DUAL_INTERFACE_ARCHITECTURE.md).
+
+**CORE / EMBEDDED API** — `depth_perception_engine.core` (the same objects the package root exports). This is what a larger perception system embedding DPE (a future `hybrid_perception_engine`) uses, and the only interface it should use:
+
+```python
+from depth_perception_engine.core import (
+    DepthPerceptionPipeline, PipelineConfig, StereoObservation, GeometryFrame,
+)
+
+pipeline = DepthPerceptionPipeline(config, calibration)                 # construct once
+geometry: GeometryFrame = pipeline.process_geometry_frame(observation)  # per frame
+```
+
+`process_geometry_frame(observation)` is the embedded entry point: it returns the authoritative `GeometryFrame` directly, without the caller reaching through `DepthPerceptionResult`, and — unlike `DepthPerceptionResult.geometry_frame` — never returns `None`, since calling it *is* the request for a frame. `PipelineConfig.enable_geometry_frame` keeps its exact prior meaning (it gates only the legacy result field).
+
+**STANDALONE / SENSOR-FACING API** — `depth_perception_engine.standalone.StandaloneStereoInterface`. This is what keeps DPE independently runnable for development, tests, benchmarks, datasets, physical stereo/motion qualification and debugging. It adapts raw/convenient inputs (a calibration *file path*, a combined side-by-side frame, plain angular-rate tuples, loose per-frame arguments) into the same canonical `StereoObservation`, then delegates to the same engine:
+
+```python
+from depth_perception_engine.standalone import StandaloneStereoInterface
+
+dpe = StandaloneStereoInterface.from_calibration_file(calibration_path, config)
+geometry = dpe.process_geometry_frame(left_image, right_image, timestamp=t)
+```
+
+It implements no geometry and duplicates no algorithm. It is **not** part of an embedded consumer's runtime path: that consumer never imports the subpackage, so the layer is structurally absent rather than switched off by a mode flag. The root re-export of `StandaloneStereoInterface` is lazy (PEP 562 `__getattr__`) specifically so importing DPE's core never loads it.
+
+Both interfaces converge on one implementation, `DepthPerceptionPipeline.process_observation()`, and produce the one authoritative `GeometryFrame` — proven field-for-field over real (non-mocked) algorithm runs in `tests/test_dual_interface_architecture.py`.
+
 ## The canonical import
 
 ```python
@@ -26,10 +56,14 @@ pipeline = DepthPerceptionPipeline(PipelineConfig(), calibration)   # build once
 Two ways to call it, both real, both documented — do not assume `.process()` accepts a `StereoObservation` directly; it does not:
 
 ```python
-result = pipeline.process(left_image, right_image)          # primary: two plain NumPy arrays
+result = pipeline.process(left_image, right_image)          # convenience: two plain NumPy arrays
 # or, if you already have a StereoObservation:
-result = pipeline.process_observation(observation)           # observation: StereoObservation
+result = pipeline.process_observation(observation)           # observation: StereoObservation — THE core entry point
+# or, for the authoritative provider contract directly:
+geometry = pipeline.process_geometry_frame(observation)      # -> GeometryFrame
 ```
+
+`process()` is now a thin adapter: it builds a `StereoObservation` from its loose arguments (by reference — no image is copied) and delegates to `process_observation()`, which holds DPE's single geometry implementation. Both call shapes remain fully supported and produce identical results.
 
 `mp01_perception`'s actual `perception_processor.py` uses the first form today (`from depth_perception_engine import (DepthPerceptionPipeline, DepthPerceptionResult, PipelineConfig, load_stereo_calibration)` then `.process(left, right)`) — already, independently, exactly Tier-1-only, verified by direct inspection of its source this pass.
 

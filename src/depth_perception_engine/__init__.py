@@ -7,6 +7,44 @@ object: DepthPerceptionPipeline — the repository is not named after a
 class, and the class is not named after the repository; there is no
 `DepthPerceptionEngine` symbol and none is planned (see docs/PUBLIC_API.md).
 
+TWO INTERFACES, ONE ENGINE (dual-interface architecture — see
+docs/DUAL_INTERFACE_ARCHITECTURE.md). DPE is consumed through exactly two
+supported interfaces, and they differ ONLY in how a valid input reaches the
+engine — never in what the engine then does:
+
+    CORE / EMBEDDED API — `depth_perception_engine.core` (or the identical
+    symbols re-exported here). What a larger perception system embedding DPE
+    (a future hybrid_perception_engine) uses. The consumer supplies an
+    already-prepared StereoObservation and receives a GeometryFrame:
+
+        from depth_perception_engine import (
+            DepthPerceptionPipeline, PipelineConfig, StereoObservation, GeometryFrame,
+        )
+        pipeline = DepthPerceptionPipeline(config, calibration)     # once
+        geometry = pipeline.process_geometry_frame(observation)     # per frame
+
+    STANDALONE / SENSOR-FACING API — `depth_perception_engine.standalone`
+    (StandaloneStereoInterface, also lazily re-exported here). What keeps DPE
+    independently runnable for development, tests, benchmarks, datasets,
+    physical stereo/motion qualification and debugging. It adapts raw and
+    convenient inputs — a calibration file path, a combined side-by-side
+    frame, plain angular-rate tuples, loose per-frame arguments — into the
+    same canonical StereoObservation, then delegates to the same engine:
+
+        from depth_perception_engine.standalone import StandaloneStereoInterface
+        dpe = StandaloneStereoInterface.from_calibration_file(path, config)
+        geometry = dpe.process_geometry_frame(left_image, right_image, timestamp=t)
+
+Both paths converge on ONE implementation,
+DepthPerceptionPipeline.process_observation(), and both produce the one
+authoritative output contract, GeometryFrame. There is no second geometry
+implementation, no StandaloneGeometryFrame/HPEGeometryFrame, and no
+standalone/embedded mode flag anywhere in this package: an embedded consumer
+simply never imports the standalone subpackage, so that layer is ABSENT from
+its execution path rather than switched off inside it. Importing
+`depth_perception_engine.core` provably does not load
+`depth_perception_engine.standalone` (tests/test_dual_interface_architecture.py).
+
 Canonical usage — every symbol below imports directly from this package
 root; nothing external should need to import from a submodule:
 
@@ -47,6 +85,14 @@ Three API tiers — full reference in docs/PUBLIC_API.md:
     Tier 3 (internal):  everything else — submodules remain importable
                         (e.g. depth_perception_engine.pipeline) but are not
                         part of the documented, stable contract.
+
+    Standalone tier:    StandaloneStereoInterface — the supported public
+                        entry point of the sensor-facing convenience
+                        interface described above. Exported here lazily
+                        (PEP 562 module __getattr__) precisely so that
+                        importing the core never pulls the standalone layer
+                        in; `depth_perception_engine.standalone` remains its
+                        canonical import path.
 
 GeometryFrame (Phase D2) is the FINAL, authoritative DPE V1 provider
 contract for any external perception system — see
@@ -261,7 +307,7 @@ from depth_perception_engine.traversability import (
     TextureClass,
 )
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 __all__ = [
     "__version__",
@@ -339,6 +385,11 @@ __all__ = [
     # deliberately did not promote it for that reason) — promoted now
     # because it is one of D13's own named Tier 1 INPUT contracts.
     "MotionHint",
+    # --- Standalone tier: the sensor-facing convenience interface ---
+    # Resolved lazily by __getattr__ below (see the module docstring) so a
+    # core/embedded consumer never loads it. Listed in __all__ because it
+    # IS a supported, documented public entry point.
+    "StandaloneStereoInterface",
     # --- Tier 2: advanced functional API ---
     "process_stereo_pair",
     "compute_disparity",
@@ -346,3 +397,27 @@ __all__ = [
     "classify_traversability",
     "detect_obstacles",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily resolve the standalone tier's public entry point.
+
+    PEP 562 module-level __getattr__, deliberately restricted to exactly one
+    name. `from depth_perception_engine import StandaloneStereoInterface`
+    works exactly like any other root import, but merely importing this
+    package (or `depth_perception_engine.core`) does NOT import
+    `depth_perception_engine.standalone` — which is what makes "the
+    standalone layer is absent from an embedded consumer's execution path"
+    a structural property this package can actually be tested against,
+    rather than a convention. Every other attribute falls through to the
+    normal AttributeError, so no internal symbol becomes reachable here.
+    """
+    if name == "StandaloneStereoInterface":
+        from depth_perception_engine.standalone import StandaloneStereoInterface
+
+        return StandaloneStereoInterface
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | {"StandaloneStereoInterface"})

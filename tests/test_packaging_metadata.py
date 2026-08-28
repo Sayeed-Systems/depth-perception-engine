@@ -297,6 +297,11 @@ class TestIsolatedBuildProducesNonEmptyWheel:
                     f"{_EXPECTED_IMPORT_NAME}/geometry/__init__.py",
                     f"{_EXPECTED_IMPORT_NAME}/pipeline/pipeline.py",
                     f"{_EXPECTED_IMPORT_NAME}/obstacles/threat_assessment.py",
+                    # Dual-interface architecture: both public interface
+                    # namespaces must actually ship, or an embedded consumer
+                    # gets an ImportError from a "successful" install.
+                    f"{_EXPECTED_IMPORT_NAME}/core/__init__.py",
+                    f"{_EXPECTED_IMPORT_NAME}/standalone/interface.py",
                 ):
                     assert expected_module in names, (
                         f"isolated build wheel is missing {expected_module} — "

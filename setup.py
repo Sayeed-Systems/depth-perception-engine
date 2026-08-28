@@ -64,7 +64,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="depth-perception-engine",
-    version="1.1.1",
+    version="1.2.0",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
 )

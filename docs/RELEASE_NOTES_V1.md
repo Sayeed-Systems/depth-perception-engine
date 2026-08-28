@@ -1,6 +1,6 @@
 # depth_perception_engine — MP01 V1 release notes
 
-**Status: `v1.1.1` — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.** (HISTORICAL: this document's original Phase D16 status was "FREEZE-READY" at the `1.0.0` V1 provider-contract freeze; superseded by the post-freeze I1-I6.3 improvement series and the D17/D18 packaging/structural-closure patches below — the provider contract itself, `GeometryFrame`, has not changed since D16.) This document is the single, concise, release-focused summary of what `depth_perception_engine` (DPE) is, what it guarantees, and what it explicitly does not do. It supersedes nothing — `docs/PUBLIC_API.md` remains the authoritative Tier 1/2/3 reference and `docs/DPE_V1_PROVIDER_CONTRACT.md` remains the authoritative phase-by-phase design/validation record (D1-D18) — this file exists so a future integrator (principally an NPE/`hybrid_perception_engine` developer) can read one page and know whether DPE is ready to build on.
+**Status: `v1.2.0` — DUAL-INTERFACE ARCHITECTURE; DPE algorithms remain SOFTWARE/SIMULATION DEVELOPMENT FROZEN.** (HISTORICAL: this document's original Phase D16 status was "FREEZE-READY" at the `1.0.0` V1 provider-contract freeze; superseded by the post-freeze I1-I6.3 improvement series and the D17/D18 packaging/structural-closure patches below — the provider contract itself, `GeometryFrame`, has not changed since D16.) This document is the single, concise, release-focused summary of what `depth_perception_engine` (DPE) is, what it guarantees, and what it explicitly does not do. It supersedes nothing — `docs/PUBLIC_API.md` remains the authoritative Tier 1/2/3 reference and `docs/DPE_V1_PROVIDER_CONTRACT.md` remains the authoritative phase-by-phase design/validation record (D1-D18) — this file exists so a future integrator (principally an NPE/`hybrid_perception_engine` developer) can read one page and know whether DPE is ready to build on.
 
 ## Purpose
 
@@ -74,7 +74,7 @@ DPE performs no ROS/topic/node logic, no camera/IMU driver or device-path handli
 
 ## Version
 
-Current package version: `1.1.1`.
+Current package version: `1.2.0`.
 
 - `1.0.0` — the D16 freeze.
 - `1.0.1` — packaging-only patch (Phase D17): a missing `setup.py`
@@ -101,7 +101,27 @@ Current package version: `1.1.1`.
   contract, or evidence-semantics change is included in `1.1.1` — see
   `docs/DPE_V1_PROVIDER_CONTRACT.md`'s D18 record for the full
   investigation and verification matrix.
+- `1.2.0` — **DUAL-INTERFACE ARCHITECTURE.** Additive, backward-compatible
+  architecture separation: DPE now has an explicit CORE/EMBEDDED interface
+  (`depth_perception_engine.core`; new
+  `DepthPerceptionPipeline.process_geometry_frame(observation) -> GeometryFrame`)
+  for a consuming perception system, and an explicit STANDALONE/sensor-facing
+  interface (`depth_perception_engine.standalone.StandaloneStereoInterface`,
+  which owns calibration-*file* loading, combined-frame splitting and raw
+  motion-sample normalization) that keeps DPE independently runnable for
+  development, tests, benchmarks and physical qualification.
+  `DepthPerceptionPipeline.process_observation()` is now the single geometry
+  implementation both interfaces funnel into — `process(left, right, ...)`
+  became a by-reference adapter onto it, so every existing caller (including
+  `mp01_perception`) is unaffected. Separation is structural, not a mode flag:
+  an embedding consumer never imports the standalone subpackage, and importing
+  the core provably does not load it. No algorithm, threshold, SGBM parameter,
+  calibration mathematic, `PipelineConfig` field, or `GeometryFrame` semantic
+  changed; equivalence between the two paths is proven field-for-field over
+  real (non-mocked) algorithm runs. Existing regression: 953 -> 983 passing,
+  none weakened or skipped. See
+  `docs/DUAL_INTERFACE_ARCHITECTURE.md`.
 
 ## What's next
 
-**DPE v1.1.1 — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.** No further DPE algorithm optimization is planned against simulated/synthetic fixtures; further accuracy work requires evidence from real stereo-camera/Jetson hardware qualification. The next development track is `neural_perception_engine` (NPE), consuming `GeometryFrame` as its one geometric-evidence input, per the architecture this whole D-phase series was designed around.
+**DPE v1.2.0 — DPE algorithms remain SOFTWARE/SIMULATION DEVELOPMENT FROZEN.** No further DPE algorithm optimization is planned against simulated/synthetic fixtures; further accuracy work requires evidence from real stereo-camera/Jetson hardware qualification. The next development track is `neural_perception_engine` (NPE), consuming `GeometryFrame` as its one geometric-evidence input, per the architecture this whole D-phase series was designed around.

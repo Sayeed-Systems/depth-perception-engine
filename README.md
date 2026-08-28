@@ -7,7 +7,8 @@ navigating indoor environments, and designed to be embedded in any
 consuming system (ROS2 node, simulator adapter, desk-test script) without
 dragging in ROS, camera hardware, or a GUI.
 
-**Current release: `v1.1.1` — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
+**Current release: `v1.2.0` — dual-interface architecture; DPE algorithms
+remain SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
 See [Release Status](#release-status) below.
 
 ![Demo](docs/assets/demo.gif)
@@ -235,6 +236,30 @@ perception provider only**:
 Full release contract (INPUT/EXECUTION/AUTHORITATIVE-OUTPUT, owns/does-not-own):
 [`docs/RELEASE_NOTES_V1.md`](docs/RELEASE_NOTES_V1.md).
 
+**Which interface a consumer uses.** DPE exposes two, and they differ only in
+how a valid input reaches the engine — both funnel into the same implementation
+and both produce the same `GeometryFrame`:
+
+```python
+# CORE / EMBEDDED — what a consuming perception system should use.
+from depth_perception_engine.core import (
+    DepthPerceptionPipeline, PipelineConfig, StereoObservation, GeometryFrame,
+)
+pipeline = DepthPerceptionPipeline(config, calibration)          # construct once
+geometry = pipeline.process_geometry_frame(observation)          # per frame
+
+# STANDALONE — development, tests, benchmarks, physical qualification only.
+from depth_perception_engine.standalone import StandaloneStereoInterface
+dpe = StandaloneStereoInterface.from_calibration_file(path, config)
+geometry = dpe.process_geometry_frame(left_image, right_image, timestamp=t)
+```
+
+A consuming system never constructs the standalone interface: it simply does not
+import that subpackage, so the layer is structurally absent from its runtime
+path rather than switched off by a mode flag. Full rationale, execution graph
+and enforced invariants:
+[`docs/DUAL_INTERFACE_ARCHITECTURE.md`](docs/DUAL_INTERFACE_ARCHITECTURE.md).
+
 ## Installation
 
 ```bash
@@ -347,6 +372,13 @@ pipeline.close()                # marks the pipeline unusable; further process()
 `from_config()` is also available as an alternate constructor, equivalent
 to `DepthPerceptionPipeline(...)` above.
 
+`pipeline.process_geometry_frame(observation)` returns the authoritative
+`GeometryFrame` directly (never `None`) — that, not `result.geometry_frame`, is
+the entry point a consuming perception system should use. `process()` above is a
+convenience adapter that builds a `StereoObservation` from its loose arguments
+and delegates to `process_observation()`, DPE's single geometry implementation.
+See [`docs/DUAL_INTERFACE_ARCHITECTURE.md`](docs/DUAL_INTERFACE_ARCHITECTURE.md).
+
 See [`examples/synthetic_demo.py`](examples/synthetic_demo.py) for this
 same call shape run standalone (no camera).
 
@@ -407,6 +439,8 @@ docs/                          architecture, contracts, validation reports, engi
 | `models/` | `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading` — typed outputs, never bare dicts |
 | `utils/` | Small shared helpers (input validation, timing) used by the pipeline glue, not by any one algorithm |
 | `pipeline/` | `DepthPerceptionPipeline` (stateful, recommended) + the stateless `pipeline.api` functions |
+| `core/` | CORE / EMBEDDED API namespace — the engine, canonical input and authoritative output contract an embedding consumer needs, re-exported (never redefined) in one place |
+| `standalone/` | STANDALONE / SENSOR-FACING API — `StandaloneStereoInterface`: calibration-file loading, combined-frame splitting, raw motion-sample normalization. Owns no geometry; delegates to the core. Never on an embedded consumer's path |
 
 No module under `src/` imports `rclpy`, `sensor_msgs`, or `cv_bridge`, opens
 a camera device, or calls any `cv2.imshow`/`waitKey`/GUI function — enforced
@@ -457,7 +491,19 @@ Full engineering history: [`docs/ENGINEERING_EVOLUTION.md`](docs/ENGINEERING_EVO
 
 ## Release Status
 
-**`v1.1.1` — SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
+**`v1.2.0` — DUAL-INTERFACE ARCHITECTURE. DPE algorithms remain
+SOFTWARE/SIMULATION DEVELOPMENT FROZEN.**
+
+`v1.2.0` is an additive, backward-compatible architecture release: DPE now
+exposes a CORE/EMBEDDED interface (`depth_perception_engine.core`,
+`DepthPerceptionPipeline.process_geometry_frame(observation) -> GeometryFrame`)
+for a consuming perception system, and a STANDALONE/sensor-facing interface
+(`depth_perception_engine.standalone.StandaloneStereoInterface`) that keeps DPE
+independently runnable. Both converge on one implementation and produce the one
+authoritative `GeometryFrame` — proven field-for-field over real algorithm runs.
+No algorithm, threshold, calibration mathematic, or `GeometryFrame` semantic
+changed. See
+[`docs/DUAL_INTERFACE_ARCHITECTURE.md`](docs/DUAL_INTERFACE_ARCHITECTURE.md).
 
 `GeometryFrame`'s complete type graph has been Tier 1 and structurally
 frozen since the D13/D16 freeze passes. The post-freeze `I1-I6.3`

@@ -15,10 +15,22 @@
 | `models/` | `StereoObservation`, `DepthPerceptionResult`, `TraversabilityResult`, `ObstacleAssessment`, `BeamReading`, `PipelineHealth` — typed values, never bare dicts | `traversability/` (for `RegionStats`/`NavigationDecision`) |
 | `utils/` | Small shared helpers (generic stereo-pair shape validation, timing) used by the pipeline glue, not by any one algorithm | nothing else in this package |
 | `pipeline/` | The public entry point — see below | everything above |
+| `core/` | CORE / EMBEDDED API namespace — re-exports (never redefines) the engine, the canonical input contract and the authoritative output contract for a consumer embedding DPE. Imports nothing from `standalone/`. | `pipeline/`, `models/`, `config/`, `calibration/`, `geometry/`, `temporal/`, `frames` |
+| `standalone/` | STANDALONE / SENSOR-FACING API — `StandaloneStereoInterface`: calibration-file loading, combined-frame splitting, raw motion-sample normalization, loose-argument adaptation. Owns no geometry; delegates every frame to the core. Nothing in the library depends on it. | `pipeline/`, `calibration/`, `stereo/` (`FrameSplitter` only), `models/`, `temporal/` |
+
+## Dual-interface architecture
+
+DPE is consumed through two interfaces — a STANDALONE/sensor-facing convenience
+interface (`standalone.StandaloneStereoInterface`) and a CORE/EMBEDDED interface
+(`core`, i.e. `DepthPerceptionPipeline` + `StereoObservation` -> `GeometryFrame`).
+They differ ONLY in how a valid input reaches the engine; both funnel into the
+single implementation described below. Full rationale, execution graph and the
+enforced invariants: [`DUAL_INTERFACE_ARCHITECTURE.md`](DUAL_INTERFACE_ARCHITECTURE.md).
 
 ## Canonical execution path
 
-There is exactly one algorithm path, reachable two ways:
+There is exactly one algorithm path — `DepthPerceptionPipeline.process_observation()`
+— reachable several ways, every one of which is a thin delegation into it:
 
 ```
 StereoObservation / (left_image, right_image)
@@ -52,7 +64,11 @@ per-beam obstacle scan                  obstacles.ThreatAssessor
 DepthPerceptionResult                   fusion.result_builder
 ```
 
-**Two entry points, one path — not two competing pipelines:**
+**Entry points, one path — not competing pipelines:**
+- `DepthPerceptionPipeline.process_observation(observation)` — **the single geometry implementation.** Every other entry point below reaches it.
+- `DepthPerceptionPipeline.process_geometry_frame(observation)` — the embedded/core entry point: `process_observation()` plus the shared `_build_geometry_frame()` helper; returns `GeometryFrame` directly.
+- `DepthPerceptionPipeline.process(left, right, ...)` — builds a `StereoObservation` (by reference) and delegates.
+- `standalone.StandaloneStereoInterface.process*()` — adapts raw/convenient input into a `StereoObservation` and delegates to the engine it holds.
 - `pipeline.DepthPerceptionPipeline` (class, stateful) — `.process()`, `.process_observation()`. Holds `ThreatAssessor` persistently across calls, because its EMA/debounce state must survive between frames; rebuilding it every frame throws that smoothing away. **This is the entry point any long-running caller (ROS node, live demo) should use.**
 - `pipeline.api` (module, five stateless functions: `process_stereo_pair`, `compute_disparity`, `estimate_depth`, `classify_traversability`, `detect_obstacles`) — thin wrappers that construct the same underlying stage classes fresh on every call. Useful for one-shot scripts and tests where per-frame smoothing doesn't matter; **not** suitable for a caller that processes a video stream, since a fresh `ThreatAssessor` every call means no debounce ever engages.
 
