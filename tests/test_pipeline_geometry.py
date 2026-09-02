@@ -325,7 +325,8 @@ class TestResultContract:
         temporal_stabilization/rotation_compensation_status/
         motion_aware_reliability/temporal_persistence (Level 4, Phases
         E2-E7) / geometry_frame (Phase D2) / surface_evidence (Phase D4)
-        / boundary_evidence (Phase D5) / opening_evidence (Phase D6) were
+        / boundary_evidence (Phase D5) / opening_evidence (Phase D6) /
+        observation_id (Phase D2 identity) were
         appended at the end, in that order, and every earlier field
         name/order/default is untouched (Task 4: do not rename/remove/
         reorder existing fields)."""
@@ -357,6 +358,7 @@ class TestResultContract:
             "surface_evidence",
             "boundary_evidence",
             "opening_evidence",
+            "observation_id",
         ]
         # temporal_consistency, temporal_stabilization,
         # rotation_compensation_status, motion_aware_reliability,

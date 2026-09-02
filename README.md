@@ -501,9 +501,22 @@ for a consuming perception system, and a STANDALONE/sensor-facing interface
 (`depth_perception_engine.standalone.StandaloneStereoInterface`) that keeps DPE
 independently runnable. Both converge on one implementation and produce the one
 authoritative `GeometryFrame` — proven field-for-field over real algorithm runs.
-No algorithm, threshold, calibration mathematic, or `GeometryFrame` semantic
-changed. See
+No algorithm, threshold, calibration mathematic, or existing `GeometryFrame`
+field semantic changed. See
 [`docs/DUAL_INTERFACE_ARCHITECTURE.md`](docs/DUAL_INTERFACE_ARCHITECTURE.md).
+
+`v1.2.0` also adds OBSERVATION IDENTITY (Phase D2):
+`StereoObservation.observation_id` is copied verbatim onto
+`GeometryFrame.observation_id` as opaque, caller-owned provenance, so an
+external orchestrator can prove a `GeometryFrame` and another provider's
+frame came from the same capture. DPE never generates, parses, interprets,
+or branches on it, and never uses it for temporal admission — geometry
+output is byte-identical with and without it. It is deliberately DISTINCT
+from `frame_id`, which remains COORDINATE-frame identity
+(`camera_optical_left` / `body`, unchanged); the older
+`StereoObservation.frame_id` spelling is retained as a documented
+DEPRECATED alias. See
+[`docs/D2_OBSERVATION_IDENTITY_CONTRACT.md`](docs/D2_OBSERVATION_IDENTITY_CONTRACT.md).
 
 `GeometryFrame`'s complete type graph has been Tier 1 and structurally
 frozen since the D13/D16 freeze passes. The post-freeze `I1-I6.3`

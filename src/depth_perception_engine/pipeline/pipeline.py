@@ -276,6 +276,7 @@ class DepthPerceptionPipeline:
         right_timestamp: Optional[float] = None,
         motion_hint: Optional[MotionHint] = None,
         motion_hints: Optional[Sequence[MotionHint]] = None,
+        observation_id: Optional[str] = None,
     ) -> DepthPerceptionResult:
         """Run one stereo pair through the full pipeline.
 
@@ -304,6 +305,15 @@ class DepthPerceptionPipeline:
                 given). This library performs no synchronization or skew
                 checking on them — purely a pass-through convenience so a
                 caller doesn't have to track timestamps out-of-band.
+            observation_id: Phase D2. Optional opaque, caller-owned
+                observation/transaction identity for this capture. New,
+                additive, trailing, defaulted parameter — every existing
+                positional or keyword call site is unaffected. Forwarded
+                verbatim onto StereoObservation.observation_id and copied
+                unchanged onto the resulting GeometryFrame; DPE never
+                interprets it and no algorithm branches on it. NOT a
+                coordinate frame — see models.StereoObservation and
+                docs/D2_OBSERVATION_IDENTITY_CONTRACT.md.
             motion_hint: Level 4, Phase E2. Optional temporal.MotionHint
                 associated with this frame — new, additive, defaulted
                 parameter; every existing call site is unaffected. Has no
@@ -349,6 +359,7 @@ class DepthPerceptionPipeline:
                 right_timestamp=right_timestamp,
                 motion_hint=motion_hint,
                 motion_hints=motion_hints,
+                observation_id=observation_id,
             )
         )
 
@@ -373,10 +384,14 @@ class DepthPerceptionPipeline:
         afterwards. See docs/DUAL_INTERFACE_ARCHITECTURE.md.
 
         `observation.left_image`/`.right_image` are used by reference —
-        never copied here. `observation.calibration`/`.frame_id` remain
-        reserved and unread (see models.StereoObservation's own
-        docstring): the calibration this pipeline was constructed with is
-        always the one used. Every other field maps one-to-one onto
+        never copied here. `observation.calibration` remains reserved and
+        unread (see models.StereoObservation's own docstring): the
+        calibration this pipeline was constructed with is always the one
+        used. `observation.observation_id` (Phase D2, and its deprecated
+        `frame_id` alias) IS now read — but only to be copied verbatim
+        onto the resulting GeometryFrame as opaque provenance; no
+        geometry, temporal, or admission decision anywhere in this method
+        depends on its value. Every other field maps one-to-one onto
         process()'s own identically named parameter, with identical
         semantics — see process()'s docstring for what each one does.
 
@@ -400,6 +415,14 @@ class DepthPerceptionPipeline:
         right_timestamp = observation.right_timestamp
         motion_hint = observation.motion_hint
         motion_hints = observation.motion_hints
+        # Phase D2: THE one place DPE reads observation identity. Read
+        # verbatim through StereoObservation's own resolver (which already
+        # settled observation_id vs the deprecated frame_id alias) and
+        # carried untouched to build_result() below. Nothing between here
+        # and there inspects, parses, or branches on it — in particular no
+        # temporal stage sees it, so chronology keeps keying on timestamp
+        # exactly as before D2.
+        observation_id = observation.resolved_observation_id
         if self._closed:
             raise RuntimeError(
                 "DepthPerceptionPipeline.process_observation() called after close() — "
@@ -939,6 +962,7 @@ class DepthPerceptionPipeline:
             surface_evidence=surface_evidence,
             boundary_evidence=boundary_evidence,
             opening_evidence=opening_evidence,
+            observation_id=observation_id,
         )
 
         # Phase D2: GeometryFrame provider contract, gated by

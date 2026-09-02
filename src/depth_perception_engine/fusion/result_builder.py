@@ -84,6 +84,7 @@ def build_result(
     surface_evidence: Optional[List[SurfaceEvidence]] = None,
     boundary_evidence: Optional[List[BoundaryEvidence]] = None,
     opening_evidence: Optional[List[OpeningEvidence]] = None,
+    observation_id: Optional[str] = None,
 ) -> DepthPerceptionResult:
     """Assemble the final structured pipeline output.
 
@@ -161,6 +162,7 @@ def build_result(
         surface_evidence=surface_evidence,
         boundary_evidence=boundary_evidence,
         opening_evidence=opening_evidence,
+        observation_id=observation_id,
     )
 
 
@@ -453,6 +455,11 @@ def build_geometry_frame(
     region_evidence/clearance_evidence above.
     """
     return GeometryFrame(
+        # Phase D2: observation identity is a verbatim copy — never
+        # generated, parsed, or interpreted here — and is deliberately
+        # kept separate from frame_id on the very next line, which remains
+        # the COORDINATE frame exactly as before D2.
+        observation_id=result.observation_id,
         timestamp=result.timestamp,
         frame_id=FrameId.CAMERA_OPTICAL_LEFT,
         disparity_map=result.disparity_map,

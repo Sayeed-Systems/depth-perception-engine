@@ -243,6 +243,7 @@ class StandaloneStereoInterface:
         motion_hints: Optional[Sequence[MotionHint]] = None,
         motion_samples: Optional[Iterable[RawMotionSample]] = None,
         motion_frame_id: str = FrameId.BODY,
+        observation_id: Optional[str] = None,
     ) -> StereoObservation:
         """Assemble the canonical core input contract from loose arguments.
 
@@ -255,6 +256,13 @@ class StandaloneStereoInterface:
         `motion_hints`: it is normalized through build_motion_hints() above.
         Supplying both is a caller error and raises, rather than silently
         preferring one.
+
+        `observation_id` (Phase D2) is passed straight through onto the
+        core contract's own StereoObservation.observation_id — this
+        adapter neither generates nor interprets identity, exactly as it
+        neither generates timestamps nor interprets motion. Note
+        `motion_frame_id` above is an unrelated COORDINATE frame for the
+        motion samples; the two must not be confused.
 
         Images are stored on the returned StereoObservation BY REFERENCE.
         """
@@ -272,6 +280,7 @@ class StandaloneStereoInterface:
             right_timestamp=right_timestamp,
             motion_hint=motion_hint,
             motion_hints=motion_hints,
+            observation_id=observation_id,
         )
 
     # ------------------------------------------------------------------

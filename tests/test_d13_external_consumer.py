@@ -44,6 +44,8 @@ import ast
 import pathlib
 
 import cv2
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -289,6 +291,16 @@ class TestExternalConsumerWorkflow:
         assert gf.quality.overall_state in {"VALID", "DEGRADED", "INSUFFICIENT"}
         assert isinstance(gf.quality.degradation_reasons, list)
 
+    def test_observation_identity_is_returned_to_the_external_consumer(self):
+        """Phase D2: an external consumer must be able to correlate the
+        GeometryFrame it receives back to the capture it submitted, using
+        nothing but the public contract."""
+        gf = _run_external_consumer_workflow()
+        # This workflow submits no identity, so the contract must say so
+        # honestly rather than inventing one.
+        assert gf.observation_id is None
+        assert "observation_id" in {f.name for f in dataclasses.fields(GeometryFrame)}
+
     def test_full_evidence_family_checklist_is_exhaustive(self):
         """Meta-guard: enumerates GeometryFrame's own dataclass fields and
         confirms every one of them was actually exercised by name
@@ -306,6 +318,7 @@ class TestExternalConsumerWorkflow:
             "region_evidence", "clearance_evidence",
             "surface_evidence", "boundary_evidence", "opening_evidence",
             "quality",
+            "observation_id",
         }
         assert field_names == exercised_in_this_file, (
             f"GeometryFrame field set changed — update this file's coverage. "

@@ -84,6 +84,28 @@ Current package version: `1.2.0`.
   (SGBM P1/P2 channel-count fix, shadow-zone/ramp-zone reliability
   gating, opening span-assembly fix, `ClearanceEvidence` false-clear
   closure on the qualified benchmark). No `GeometryFrame` API change.
+- `1.2.0` — **DUAL-INTERFACE ARCHITECTURE + HPE-READY OBSERVATION
+  IDENTITY.** Additive and backward compatible; no algorithm, threshold,
+  calibration mathematic, or existing `GeometryFrame` field semantic
+  changed (verified byte-identical against the pre-change implementation).
+  Two additions: (a) the CORE/EMBEDDED interface
+  (`depth_perception_engine.core`,
+  `DepthPerceptionPipeline.process_geometry_frame(observation) ->
+  GeometryFrame`) alongside the STANDALONE sensor-facing interface, both
+  converging on one implementation; (b) Phase D2 observation identity —
+  `StereoObservation.observation_id` propagates verbatim to
+  `GeometryFrame.observation_id` as opaque, caller-owned provenance.
+  DPE never generates, parses, interprets, or branches on it, and never
+  uses it for temporal admission. It is deliberately DISTINCT from
+  `frame_id`, which remains COORDINATE-frame identity
+  (`camera_optical_left` / `body`) and is unchanged. The pre-existing
+  `StereoObservation.frame_id` is retained as a DEPRECATED alias for
+  observation identity (supplying it when `observation_id` is `None`;
+  setting both to different values raises). An external orchestrator
+  should join provider results on `observation_id` — `timestamp` is
+  optional, caller-defined and NOT guaranteed unique, so it must not be
+  the primary exact join key. See
+  `docs/D2_OBSERVATION_IDENTITY_CONTRACT.md`.
 - `1.1.1` — **DPE STRUCTURAL CLOSURE.** Packaging-only fix (Phase D18):
   `[tool.setuptools.packages.find]`'s TOML-driven auto-discovery was
   proven to silently produce an EMPTY wheel (correct metadata, zero

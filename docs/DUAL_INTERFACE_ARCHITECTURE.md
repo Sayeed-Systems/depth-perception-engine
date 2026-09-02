@@ -203,7 +203,8 @@ exactly what DPE requires, so nothing was added to it:
 | `left_timestamp` / `right_timestamp` | opaque caller-defined floats |
 | `motion_hint` | optional normalized `MotionHint` for temporal-record association |
 | `motion_hints` | optional bounded sequence for rotation compensation |
-| `frame_id` | optional caller-side observation identity (reserved, unread) |
+| `observation_id` | **Phase D2** — opaque caller-owned observation/transaction identity, copied verbatim onto `GeometryFrame.observation_id`; never interpreted |
+| `frame_id` | **deprecated** alias of `observation_id` (was reserved+unread pre-D2; now supplies identity when `observation_id` is `None`) |
 | `calibration` | reserved for future multi-rig use (unread; the pipeline's own calibration is always used) |
 
 The core never consumes a ROS `sensor_msgs/Imu` or any raw device message. The

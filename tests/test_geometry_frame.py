@@ -153,6 +153,9 @@ class TestPubliclyImportable:
             "opening_evidence",
             # Phase D8
             "quality",
+            # Phase D2 (observation identity) — deliberately DISTINCT from
+            # frame_id above, which remains the coordinate frame.
+            "observation_id",
         }
 
 

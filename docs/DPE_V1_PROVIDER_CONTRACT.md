@@ -13,6 +13,18 @@ Builds on `docs/PUBLIC_API.md` (current Tier 1/2/3 accounting), `docs/LEVEL4_CAN
 5. DPE owns geometry-only future capabilities (surfaces, normals, boundaries, openings, clearance) — not designed in this pass.
 6. `mp01_perception` must not break; existing outputs remain compatibility APIs until the new contract is stable.
 
+> **Phase D2 update — observation identity.** `GeometryFrame` gained one further
+> additive, defaulted field: `observation_id: Optional[str] = None`, the opaque
+> caller-owned observation/transaction identity copied verbatim from
+> `StereoObservation`. It is deliberately SEPARATE from `frame_id`, which remains
+> the coordinate frame (`camera_optical_left` / `body`) and is unchanged in every
+> respect. An external orchestrator correlating this provider's output with
+> another's should join on `observation_id`, never on `timestamp` (optional,
+> caller-defined, not guaranteed unique). See
+> **`docs/D2_OBSERVATION_IDENTITY_CONTRACT.md`** for the full frozen contract,
+> the deprecation of the old `StereoObservation.frame_id` spelling, and the D2
+> qualification evidence.
+
 ## 1. Proposed authoritative DPE V1 output structure
 
 **Decision: introduce a new, purpose-built type, `GeometryFrame` — attached to the existing `DepthPerceptionResult` as one additive field, not a replacement.**

@@ -20,6 +20,23 @@ neutral geometric evidence extracted from the traversability/obstacle
 layers. It carries no traversability policy, no NavigationDecision, no
 threat-assessment thresholds, and no speculative HPE/neural fields.
 
+Identity convention (Phase D2): this object carries TWO independent
+identity axes and they must never be conflated.
+
+  * `observation_id` — WHICH CAPTURE this evidence came from. An opaque,
+    immutable, caller-owned transaction identity, copied verbatim from
+    StereoObservation.resolved_observation_id. DPE never generates,
+    parses, interprets, sequences or branches on it. This is the field an
+    external orchestration layer should join provider results on.
+  * `frame_id` (and every nested `.frame_id`) — WHICH COORDINATE SYSTEM
+    the evidence is expressed in (frames.FrameId.CAMERA_OPTICAL_LEFT /
+    BODY). Unchanged by D2 in every respect.
+
+`timestamp` is neither: it is capture time, consumed by DPE's temporal
+algorithms, optional, caller-defined, not unit-enforced and NOT
+guaranteed unique — so it must not be used as a primary exact join key.
+See docs/D2_OBSERVATION_IDENTITY_CONTRACT.md.
+
 Frame convention: `frame_id` is the frame every top-level metric field on
 this object (`disparity_map`, `depth_map`, `valid_disparity_mask`,
 `valid_depth_mask`, `geometry`) is expressed in — always
@@ -578,3 +595,10 @@ class GeometryFrame:
     opening_evidence: Optional[List[OpeningEvidence]]
 
     quality: Optional[GeometryFrameQuality]
+
+    # Phase D2 — observation/transaction identity. Defaulted and appended
+    # LAST so every existing keyword construction of this contract (including
+    # external consumers' own test fixtures) keeps working unmodified; the
+    # trailing position is a compatibility artefact, not a statement that
+    # identity is an afterthought.
+    observation_id: Optional[str] = None

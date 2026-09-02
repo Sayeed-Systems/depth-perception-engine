@@ -61,6 +61,37 @@ class StereoObservation:
     unit conversion or synchronization logic on them; that is a caller
     concern (e.g. mp01_perception's stereo sync_slop check).
 
+    observation_id (Phase D2) is THE observation/transaction identity of
+    this capture: an immutable, opaque, caller-owned string that DPE
+    copies verbatim onto the resulting geometry.GeometryFrame and
+    interprets in no other way. It exists so an external orchestration
+    layer can prove that a GeometryFrame and some other provider's frame
+    were computed from the SAME capture. DPE never generates, parses,
+    normalizes, validates the format of, sequences, or branches on this
+    value, and it is never used for temporal admission or any algorithmic
+    decision — see docs/D2_OBSERVATION_IDENTITY_CONTRACT.md.
+
+    observation_id is DELIBERATELY NOT the same concept as any `frame_id`
+    on DPE's OUTPUT type graph. Those name a COORDINATE FRAME
+    (frames.FrameId.CAMERA_OPTICAL_LEFT / BODY — the coordinate system
+    geometric evidence is expressed in). Observation identity and
+    coordinate-frame identity are separate axes and must never be
+    conflated. None (the default) means "no transaction identity was
+    supplied" — always legal; DPE still produces a full GeometryFrame.
+
+    frame_id is the DEPRECATED spelling of observation_id, retained for
+    backward compatibility only. It predates D2, was documented as
+    "optional caller-side observation identity", and was inert (never read
+    by any DPE code path) up to and including v1.1.1. As of D2 it is an
+    ALIAS: when observation_id is None, frame_id supplies the observation
+    identity, so an existing caller that populates it keeps working AND
+    now gets identity propagation for free. Supplying both with different
+    values is a caller error and raises (there is exactly ONE authoritative
+    observation identity — see resolved_observation_id below). New code
+    should use observation_id; frame_id is scheduled for removal in a
+    future major version. Note it was never a coordinate frame despite the
+    name — that naming collision is precisely why it is deprecated.
+
     calibration is reserved for future multi-rig/multi-camera use — NOT
     currently consumed by DepthPerceptionPipeline.process_observation(),
     which still always uses the calibration the pipeline itself was
@@ -104,6 +135,58 @@ class StereoObservation:
     frame_id: Optional[str] = None
     motion_hint: Optional[MotionHint] = None
     motion_hints: Optional[Sequence[MotionHint]] = None
+    # Phase D2. Appended LAST deliberately: every pre-D2 positional
+    # construction (up to and including motion_hints) keeps its exact
+    # meaning. Field ORDER is a compatibility artefact, not a statement
+    # about importance — this is the authoritative observation identity.
+    observation_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Validate identity only. Deliberately minimal: no format,
+        length, charset, uniqueness, or ordering constraint is imposed on
+        an opaque caller-owned identifier.
+
+        The non-empty rule mirrors frames.RigidTransform.__post_init__'s
+        own already-frozen "must be a non-empty string" treatment of
+        identifier strings — "" is neither a real identity nor the
+        explicit "no identity" signal (that is None)."""
+        for name in ("observation_id", "frame_id"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(
+                    f"StereoObservation.{name} must be a string or None, got "
+                    f"{type(value).__name__}."
+                )
+            if not value:
+                raise ValueError(
+                    f"StereoObservation.{name} must be a non-empty string when "
+                    "supplied — use None to mean 'no observation identity'."
+                )
+        if (
+            self.observation_id is not None
+            and self.frame_id is not None
+            and self.observation_id != self.frame_id
+        ):
+            raise ValueError(
+                "StereoObservation.observation_id and its deprecated alias "
+                f"frame_id disagree ({self.observation_id!r} vs {self.frame_id!r}). "
+                "An observation has exactly ONE identity: set observation_id "
+                "alone (preferred), or the legacy frame_id alone."
+            )
+
+    @property
+    def resolved_observation_id(self) -> Optional[str]:
+        """THE single authoritative observation identity for this capture.
+
+        observation_id wins; the deprecated frame_id alias is used only
+        when observation_id is None. __post_init__ has already rejected
+        the ambiguous case where both are set to different values, so this
+        can never silently pick between two competing identities. This is
+        the ONE accessor DPE itself reads — no DPE code path reads
+        .observation_id or .frame_id directly for propagation."""
+        return self.observation_id if self.observation_id is not None else self.frame_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +399,19 @@ class DepthPerceptionResult:
     which remain byte-identical whether or not this field is populated.
     See docs/LEVEL4_E7_IMPLEMENTATION_PLAN.md.
 
+    observation_id (Phase D2): the opaque, caller-owned observation
+    identity carried on the StereoObservation this result was computed
+    from (StereoObservation.resolved_observation_id), copied verbatim and
+    interpreted in no way. None when the caller supplied none. Carried
+    here for exactly one structural reason: fusion.result_builder.
+    build_geometry_frame() builds GeometryFrame purely by reading fields
+    off this object, so routing identity through this field is what lets
+    BOTH GeometryFrame-producing paths (process_observation()'s own
+    enable_geometry_frame branch and process_geometry_frame()) share one
+    builder and stay incapable of drifting apart. It is NOT a coordinate
+    frame and is never used by any DPE algorithm, temporal admission
+    included — see docs/D2_OBSERVATION_IDENTITY_CONTRACT.md.
+
     geometry_frame (Phase D2): None unless PipelineConfig.enable_geometry_frame
     is True (default False — every existing caller, including
     mp01_perception, is byte-for-byte unaffected). When present, a
@@ -421,6 +517,7 @@ class DepthPerceptionResult:
     surface_evidence: Optional[List[SurfaceEvidence]] = None
     boundary_evidence: Optional[List[BoundaryEvidence]] = None
     opening_evidence: Optional[List[OpeningEvidence]] = None
+    observation_id: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
